@@ -1,0 +1,562 @@
+================================================================================
+GACF-NET — EVALUATION METRICS SPECIFICATION FOR PAPER WRITING
+
+All formulas extracted directly from the actual evaluation code used to
+produce the reported numbers. Use these exact definitions in the paper.
+
+Code locations:
+  Segmentation : segmentation_code/lizard/eval_lizard_full_metrics.py
+                 segmentation_code/{consep,pannuke}/eval_*_full_metrics.py
+  Classification: code/bhfnet/eval_convention_c_{consep,pannuke}.py
+                 code/fusion_lizard/eval_convention_c.py
+================================================================================
+
+CONTENTS
+--------
+  PART A — SEGMENTATION METRICS
+    A.1  Pixel-level (binarized instance map vs binarized GT)
+         A.1.1  ACC — pixel accuracy
+         A.1.2  Dice — Dice coefficient
+         A.1.3  SE — sensitivity (recall)
+         A.1.4  SP — specificity
+    A.2  Instance-level (predicted instances vs ground-truth instances)
+         A.2.1  AJI — Aggregated Jaccard Index
+         A.2.2  PQ — Panoptic Quality
+         A.2.3  DQ — Detection Quality
+         A.2.4  SQ — Segmentation Quality
+    A.3  Aggregation across patches and folds
+    A.4  Per-dataset GT data format
+
+  PART B — CLASSIFICATION METRICS
+    B.1  Convention C — global per-class F1 (HoVer-Net protocol)
+    B.2  Detailed formula and counting rules
+    B.3  Matched-only F1 (sanity metric, NOT the headline)
+    B.4  Per-class vs average F1
+    B.5  Macro-average F1
+    B.6  AVG F1 = unweighted mean of per-class F1
+
+  PART C — WORKED NUMERIC EXAMPLE (CoNSeP fold 1, real numbers)
+
+
+================================================================================
+PART A — SEGMENTATION METRICS
+================================================================================
+
+All segmentation metrics are computed PER PATCH and then averaged across all
+patches in the test fold. The per-fold mean is then averaged across folds
+(5 folds for Lizard / CoNSeP, 3 folds for PanNuke) to get the headline number.
+
+Inputs per patch:
+  GT_inst   : ground-truth instance map (H, W), integer labels 1..N_gt
+              (label 0 = background)
+  Pred_inst : predicted instance map (H, W), integer labels 1..N_pred
+              (label 0 = background)
+              Output of Stage 1 watershed post-processing.
+
+------------------------------------------------------------
+A.1  PIXEL-LEVEL METRICS
+------------------------------------------------------------
+
+Binarize both maps:
+  GT_fg(p)   = 1 if GT_inst(p)   > 0 else 0
+  Pred_fg(p) = 1 if Pred_inst(p) > 0 else 0
+
+Compute confusion counts over all pixels p:
+  TP = sum_p  GT_fg(p) * Pred_fg(p)              # foreground hit
+  TN = sum_p  (1 - GT_fg(p)) * (1 - Pred_fg(p))  # background hit
+  FP = sum_p  (1 - GT_fg(p)) * Pred_fg(p)        # background mistakenly predicted
+  FN = sum_p  GT_fg(p) * (1 - Pred_fg(p))        # foreground missed
+
+(small constant eps = 1e-8 added to all denominators for numerical safety)
+
+
+A.1.1  ACC — pixel accuracy
+---------------------------
+
+                TP + TN
+   ACC  =  ----------------------
+            TP + TN + FP + FN
+
+Interpretation: fraction of pixels classified correctly (foreground or
+background). Reported in percent (×100).
+
+Range: [0, 1] (or 0-100%). High = good.
+
+Caveat: dominated by background pixels in low-foreground patches, so values
+on H&E are typically 94-99% even for poor segmenters.
+
+
+A.1.2  Dice — Dice coefficient (= F1 on pixels)
+-----------------------------------------------
+
+                 2 * TP
+   Dice  =  ------------------
+             2 * TP + FP + FN
+
+Interpretation: harmonic mean of pixel precision and recall, restricted to
+foreground. The standard pixel-level segmentation quality metric.
+
+Range: [0, 1]. Equivalent to pixel-level F1 score.
+
+
+A.1.3  SE — sensitivity (recall)
+--------------------------------
+
+                  TP
+   SE  =  ----------------
+            TP + FN
+
+Interpretation: fraction of ground-truth foreground pixels that were correctly
+predicted. Measures how good the model is at FINDING nuclei.
+
+Range: [0, 1]. Often called "recall" or "true positive rate".
+
+
+A.1.4  SP — specificity
+-----------------------
+
+                  TN
+   SP  =  ----------------
+            TN + FP
+
+Interpretation: fraction of ground-truth background pixels correctly left
+as background. Measures the model's restraint (low false positives).
+
+Range: [0, 1]. Often called "true negative rate".
+
+Pixel-level trade-off: higher SE typically comes at the cost of lower SP
+(model finds more nuclei but with some false positives).
+
+
+------------------------------------------------------------
+A.2  INSTANCE-LEVEL METRICS
+------------------------------------------------------------
+
+These operate on the integer instance maps directly. A predicted instance
+and a GT instance are MATCHED if their Intersection-over-Union (IoU) exceeds
+a threshold (default 0.5).
+
+   IoU(g, p) = |g ∩ p| / |g ∪ p|
+
+where g and p are binary masks of one GT and one predicted instance.
+
+
+A.2.1  AJI — Aggregated Jaccard Index
+-------------------------------------
+
+Definition (Kumar et al. 2017, Sirinukunwattana et al. 2017):
+
+For each GT instance g_i:
+  Find the predicted instance p_M(i) with the largest IoU(g_i, p_M(i)).
+  If no overlapping prediction exists, p_M(i) = empty.
+
+Then:
+
+                sum_i  | g_i ∩ p_M(i) |
+   AJI  =  -----------------------------------------------
+            sum_i  | g_i ∪ p_M(i) |   +   sum_{k ∈ U}  | p_k |
+
+where:
+  U = the set of predicted instances NOT matched as p_M(i) for any GT i
+      (these are "unused" predictions — pure detection false positives).
+
+Pseudocode (from compute_aji() in eval_lizard_full_metrics.py):
+
+  total_intersection = 0
+  total_union        = 0
+  matched_pred_ids   = set()
+
+  for each GT id g:
+      g_mask = (GT == g)
+      best_iou = 0; best_pid = None; best_i = 0; best_u = 0
+      for each pred id p that overlaps g (visited via np.unique(pred[g_mask])):
+          if p == 0: continue
+          p_mask = (Pred == p)
+          inter = |g_mask AND p_mask|
+          union = |g_mask OR p_mask|
+          iou   = inter / union
+          if iou > best_iou:
+              best_iou, best_pid, best_i, best_u = iou, p, inter, union
+      if best_pid is not None:
+          total_intersection += best_i
+          total_union        += best_u
+          matched_pred_ids.add(best_pid)
+      else:
+          total_union += |g_mask|     # unmatched GT counted as union
+
+  for each pred id p:
+      if p not in matched_pred_ids:
+          total_union += |Pred == p|  # unused pred counted as union
+
+  AJI = total_intersection / total_union
+
+Interpretation:
+  AJI penalises both segmentation quality (IoU of matched pairs) AND
+  detection errors (missed GT, extra predictions) in a single metric.
+  Compared to mean Dice over matched pairs, AJI does NOT ignore unmatched
+  predictions — they fully count against the score.
+
+Range: [0, 1]. AJI is the de-facto standard for nuclei instance segmentation
+quality in the AGAFNet / HoVer-Net literature.
+
+Why it is harder than Dice:
+  - Dice counts every foreground pixel once.
+  - AJI penalises every unmatched predicted nucleus by its full pixel count
+    in the denominator. Over-segmentation (split-up nuclei) drives AJI down
+    sharply.
+
+
+A.2.2  PQ — Panoptic Quality
+----------------------------
+
+Definition (Kirillov et al. CVPR 2019):
+
+After Hungarian matching at IoU >= 0.5:
+  TP = # of (GT, Pred) pairs with IoU >= 0.5
+  FP = # of predicted instances with no matched GT
+  FN = # of GT instances with no matched prediction
+
+  DQ = TP / (TP + 0.5*FP + 0.5*FN)      # Detection Quality (instance F1)
+
+  SQ = (1/TP) * sum over matched pairs of IoU(g, p)
+                                          # Segmentation Quality (mean IoU of TPs)
+
+  PQ = DQ * SQ
+
+Pseudocode (from compute_pq() in eval_lizard_full_metrics.py):
+
+  Build IoU matrix (N_gt x N_pred) of all pairwise IoUs.
+  Solve Hungarian assignment: linear_sum_assignment(1 - IoU_matrix).
+  For each (gt_row, pred_col) assignment:
+      if IoU_matrix[gt_row, pred_col] >= 0.5:
+          TP += 1
+          iou_sum += IoU_matrix[gt_row, pred_col]
+          add gt_row to matched_gt; add pred_col to matched_pred
+  FP = N_pred - |matched_pred|
+  FN = N_gt   - |matched_gt|
+
+  DQ = TP / (TP + 0.5*FP + 0.5*FN + eps)
+  SQ = iou_sum / (TP + eps) if TP > 0 else 0
+  PQ = DQ * SQ
+
+Interpretation:
+  PQ = DQ * SQ is a single metric that multiplicatively combines:
+    - how well the model FINDS nuclei (DQ),
+    - how well it SHAPES the ones it finds (SQ).
+  Both must be high to get a high PQ.
+
+Range: [0, 1].
+
+
+A.2.3  DQ — Detection Quality (= instance-level F1 at IoU >= 0.5)
+-----------------------------------------------------------------
+
+   DQ = TP / (TP + 0.5*FP + 0.5*FN)
+
+This is exactly the F1 score on whether each GT/predicted nucleus has
+a >= 0.5 IoU match. Equivalent form: DQ = 2*TP / (2*TP + FP + FN).
+
+
+A.2.4  SQ — Segmentation Quality (mean IoU of matched pairs)
+------------------------------------------------------------
+
+   SQ = mean of IoU(g_i, p_i) over all matched pairs i with IoU >= 0.5
+
+Only matched pairs contribute. If no matches, SQ = 0.
+
+
+------------------------------------------------------------
+A.3  AGGREGATION ACROSS PATCHES AND FOLDS
+------------------------------------------------------------
+
+For each fold:
+  per_fold_mean[metric] = mean over all patches in that fold of patch-level metric
+
+For the headline 5-fold-mean ± std table:
+  reported_value = mean over folds of per_fold_mean
+  reported_std   = std  over folds of per_fold_mean
+
+This is the standard per-image-then-per-fold aggregation used by AGAFNet,
+HoVer-Net, and most nuclei segmentation papers. It is NOT the same as
+pooling all patches across all folds and computing global metrics — be
+careful when comparing across papers.
+
+------------------------------------------------------------
+A.4  PER-DATASET GT DATA FORMAT
+------------------------------------------------------------
+
+Lizard:  GT stored as masks.npy per fold, shape (N_patches, 256, 256, 6).
+         Channels 0..5 hold instance IDs for classes 1..6 respectively.
+         parse_lizard_masks() merges these into one (256, 256) instance map.
+
+CoNSeP:  GT stored as labels.npy per fold, shape (N_patches, 256, 256, 2).
+         Channel 0 = instance map, channel 1 = type map.
+
+PanNuke: GT stored as masks.npy per fold, shape (N_patches, 256, 256, 6).
+         Channels 0..4 hold instance IDs for classes 1..5, channel 5 = bg.
+
+
+================================================================================
+PART B — CLASSIFICATION METRICS (CONVENTION C — HOVER-NET GLOBAL F1)
+================================================================================
+
+The classification metrics reported in the paper follow the EXACT protocol
+used by HoVer-Net (Graham et al., MIA 2019) and AGAFNet (Naing et al., IEEE
+TIP 2026). We call it "Convention C" to distinguish it from the simpler
+per-image average F1 (Convention A) and matched-only F1 (Convention B).
+
+Why it matters: papers that report per-image F1 averaged with empty-class
+patches set to F1=1.0 inflate scores by 10-20 points. Convention C is the
+honest, paper-comparable protocol — and is what the AGAFNet paper actually
+reports.
+
+------------------------------------------------------------
+B.1  CONVENTION C — global per-class F1 (the headline metric)
+------------------------------------------------------------
+
+For each class c in {1, ..., C}, compute four count types GLOBALLY across
+all patches and folds:
+
+  TP_c   = # of (GT, Pred) pairs where IoU >= 0.5 AND  gt_class = c  AND  pred_class = c
+                                                                       (matched + correctly classified)
+
+  FP_c   = # of (GT, Pred) pairs where IoU >= 0.5 AND  gt_class != c AND  pred_class = c
+                                                                       (matched but the prediction
+                                                                        said class c when GT was
+                                                                        a different class)
+
+  FN_c   = # of (GT, Pred) pairs where IoU >= 0.5 AND  gt_class = c  AND  pred_class != c
+                                                                       (matched but the prediction
+                                                                        missed class c)
+
+  FP_d_c = # of UNMATCHED predicted instances with pred_class = c
+                                                                       ("detection false positive":
+                                                                        a predicted nucleus that
+                                                                        doesn't overlap any GT,
+                                                                        assigned class c)
+
+  FN_d_c = # of UNMATCHED GT instances with gt_class = c
+                                                                       ("detection false negative":
+                                                                        a GT nucleus of class c
+                                                                        that no prediction matched
+                                                                        — Stage-1 missed it)
+
+Then the HoVer-Net Convention C per-class F1:
+
+                                  2 * TP_c
+   F_c = -----------------------------------------------------------------
+            2 * TP_c  +  alpha_0 * FP_c  +  alpha_1 * FN_c
+                       +  alpha_2 * FP_d_c  +  alpha_3 * FN_d_c
+
+Default weights (used by HoVer-Net and reported in our paper):
+
+   alpha = (2, 2, 1, 1)
+   i.e.  F_c = 2*TP_c / (2*TP_c + 2*FP_c + 2*FN_c + 1*FP_d_c + 1*FN_d_c)
+
+Why these weights:
+  - alpha_0 = alpha_1 = 2: matched-but-misclassified errors count DOUBLE
+    in the denominator. This is HoVer-Net's convention: a wrong-class
+    prediction is worse than just missing detection, because the model
+    confidently said the wrong thing.
+  - alpha_2 = alpha_3 = 1: detection errors (FP_d and FN_d) count once.
+    These are "the segmenter missed it" rather than "the classifier was
+    wrong", so they are penalised less heavily.
+
+Range: [0, 1]. Reported in percent.
+
+------------------------------------------------------------
+B.2  DETAILED COUNTING RULES (with code reference)
+------------------------------------------------------------
+
+From compute_convention_c() in eval_convention_c_{consep,pannuke}.py:
+
+For each predicted nucleus i with pred_class = pred_cls[i]:
+  Look up its matching entry in nucleus_matching.h5:
+    iou       = recorded IoU with best GT match (0 if no match)
+    gt_cls    = class of that matched GT (0 if no match)
+  paired = (iou >= 0.5  AND  0 < gt_cls <= num_classes)
+
+  if paired:
+      for c in 1..num_classes:
+          if   gt_cls == c  AND  pred_cls == c:  TP[c]   += 1
+          elif gt_cls != c  AND  pred_cls == c:  FP[c]   += 1
+          elif gt_cls == c  AND  pred_cls != c:  FN[c]   += 1
+          # else: gt_cls != c AND pred_cls != c — irrelevant to class c
+  else:
+      # unmatched prediction
+      if 0 < pred_cls <= num_classes:
+          FP_d[pred_cls] += 1
+
+Separately, FN_d_c is computed as:
+
+  matched_gt_per_class[c] = # of distinct GT nuclei of class c that were
+                            matched by at least one prediction at IoU >= 0.5
+                            (uses (fold, patch, gt_nuc_id) as unique key)
+
+  total_gt_per_class[c]   = # of GT nuclei of class c across all folds
+                            (from the dataset's masks.npy / labels.npy)
+
+  FN_d_c = max(0, total_gt_per_class[c] - matched_gt_per_class[c])
+
+Why FN_d matters most for rare classes:
+  Rare classes (Eosinophil 0.47%, Plasma 5.13% on Lizard) are easily missed
+  in Stage 1 segmentation. Each missed GT nucleus of class c becomes one
+  FN_d_c. With few total positives, even a small absolute FN_d_c crushes the
+  F_c denominator. This is why our Plasma F1 (37.19) is far below AGAFNet
+  paper (71.20) — most of the gap is FN_d, not classification error
+  (matched-only Plasma F1 in our pipeline is ~57%).
+
+------------------------------------------------------------
+B.3  MATCHED-ONLY F1 (sanity metric, NOT reported as headline)
+------------------------------------------------------------
+
+For sanity checking the classifier in isolation (ignoring segmentation
+detection errors), we compute the standard sklearn macro-F1 on ONLY the
+matched nuclei:
+
+  y_true = [ gt_class[i] for i in test set with gt_class[i] > 0 ]
+  y_pred = [ predicted_class[i] for those same i ]
+  matched_only_macro_F1 = sklearn.metrics.f1_score(
+      y_true, y_pred, average='macro', labels=[1, ..., num_classes]
+  )
+
+What this measures: how well the CLASSIFIER does, ASSUMING the segmenter
+already detected the nucleus. Always higher than Convention C because it
+ignores FP_d and FN_d.
+
+Why we do NOT report it as the headline:
+  It is not comparable to AGAFNet paper numbers, which use Convention C.
+  We report it only in training logs as a sanity-check metric.
+
+------------------------------------------------------------
+B.4  PER-CLASS F1 — table reporting
+------------------------------------------------------------
+
+For each dataset, we report one F_c value per class. The paper tables look
+like:
+
+  Lizard:  Neutrophil  Epithelial  Lymphocyte  Plasma  Eosinophil  Connective
+  CoNSeP:  Miscellaneous  Inflammatory  Epithelial  Spindle
+  PanNuke: Neoplastic  Inflammatory  Connective  Dead  Epithelial
+
+Each value is computed by the per-class Convention C formula above,
+aggregated globally across all folds.
+
+------------------------------------------------------------
+B.5  MACRO-AVERAGE F1
+------------------------------------------------------------
+
+The "AVG F1" column in our tables is the unweighted (macro) mean:
+
+                  1     C
+   AVG F1  =   ----  *  ∑   F_c
+                C      c=1
+
+This treats all classes equally, including rare classes. It is the metric
+AGAFNet reports as "F" or "AVG F1" in their Tables II/III/IV.
+
+We do NOT use micro-average (which would weight by class frequency and
+hide rare-class performance).
+
+------------------------------------------------------------
+B.6  GROUND-TRUTH MATCHING (how iou and gt_class get into the H5)
+------------------------------------------------------------
+
+Before Convention C eval, a matching step is run once per dataset (per fold)
+that produces a nucleus_matching.h5 file containing, for each PREDICTED
+nucleus:
+
+  patch_id (or patch_idx for Lizard)
+  nuc_id            # the predicted nucleus ID within the patch
+  fold_id
+  pred_class        # the originally-predicted class (from AGAFNet replication
+                    # for the baseline; ignored when running our XGBoost)
+  iou_with_gt       # max IoU between this pred and any GT in same patch
+  gt_nuc_id         # the matched GT instance ID (0 if no match)
+  gt_class          # the class of the matched GT (0 if no match)
+  centroid_x, centroid_y, area
+
+This matching is computed via greedy max-IoU assignment per patch, using
+the predicted instance mask and the dataset's ground-truth instance/type
+maps.
+
+Code:
+  Lizard : code/fusion_lizard/step1_match_nuclei_phase2.py
+  CoNSeP : code/consep/step1_match_nuclei_consep.py
+  PanNuke: code/pannuke/step1_match_nuclei_pannuke.py
+
+================================================================================
+PART C — WORKED NUMERIC EXAMPLE (CoNSeP fold 1, real data)
+================================================================================
+
+This walks through Convention C with the actual numbers from our pipeline.
+
+Inputs:
+  CoNSeP fold 1: 5,442 predicted nuclei from Stage 1.
+  At IoU >= 0.5, 4,034 of them match a GT nucleus.
+  Total GT nuclei of class 1 (Miscellaneous) across all folds: 2,773.
+
+For one ablation mode (e.g. "raw" in our table) on CoNSeP class 1 (Misc):
+
+  TP_1   = 254   (matched + classified Misc correctly)
+  FP_1   = 38    (matched but assigned Misc when GT was different class)
+  FN_1   = 156   (matched but assigned a non-Misc class when GT was Misc)
+  FP_d_1 = 142   (unmatched predictions assigned class Misc)
+  FN_d_1 = 2773 - matched_gt_count_1   = (some number, depends on fold)
+
+  Apply Convention C with weights (2, 2, 1, 1):
+
+  F_1  =  2 * 254  /  ( 2*254 + 2*38 + 2*156 + 142 + FN_d_1 )
+       =  508      /  ( 508   + 76   + 312   + 142 + FN_d_1 )
+       =  508      /  ( 1038  + FN_d_1 )
+
+  If FN_d_1 = 138, then F_1 = 508 / 1176 = 0.4319 = 43.19%
+
+This is exactly the kind of value reported in our tables: CoNSeP raw Misc F1 = 43.13.
+
+------------------------------------------------------------
+HOW TO REPRODUCE A VALUE FROM SCRATCH
+------------------------------------------------------------
+
+1. Run XGBoost (or any classifier) producing fold{N}_preds.npz with fields:
+     patch_id, fold_id, nuc_id, gt_class (for reference only),
+     xgb (the predicted class label per nucleus)
+
+2. Run the Convention C evaluator:
+     python eval_convention_c_consep.py \
+         --preds_dir /path/to/fold_preds_directory \
+         --out_json /path/to/output_results.json
+
+3. The script:
+     - Loads all fold{N}_preds.npz files and concatenates them.
+     - Loads nucleus_matching.h5 to get (iou, gt_class) per nucleus.
+     - Computes global GT counts per class from labels.npy / masks.npy.
+     - Applies the Convention C formula per class.
+     - Prints per-class and AVG F1, also saves JSON.
+
+================================================================================
+KEY TAKEAWAYS FOR THE PAPER
+================================================================================
+
+1. Segmentation: report ACC, Dice, SE, SP, AJI, PQ, DQ, SQ in a single table.
+   AJI and PQ are the headline instance metrics; the others are pixel-level.
+
+2. Classification: report PER-CLASS F1 and AVG F1 using Convention C
+   (HoVer-Net global protocol with weights (2, 2, 1, 1)). DO NOT use per-image
+   average F1 — it inflates numbers by ignoring the empty-class problem.
+
+3. Convention C penalises Stage-1 detection errors (FN_d, FP_d) inside the
+   classification F1. This is the right metric for evaluating an end-to-end
+   pipeline. The rare-class gaps on Lizard (Plasma -34, Eosinophil -30 vs
+   paper) are largely FN_d, not classifier error. Be explicit about this in
+   the manuscript discussion.
+
+4. Matched-only F1 is useful for ablation debugging but should NOT be the
+   headline. Always report Convention C as the comparison-to-AGAFNet number.
+
+5. Pixel ACC is dominated by background and not very informative on H&E.
+   Lead with AJI / PQ for segmentation comparisons.
+
+================================================================================
+END OF METRICS SPEC
+================================================================================

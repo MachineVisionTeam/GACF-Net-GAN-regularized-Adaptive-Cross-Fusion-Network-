@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Logs (training/eval logs are large and ephemeral; keep result .txt only)
+*.log
+
+# Data — DO NOT commit large model artefacts or features to git
+*.h5
+*.npz
+*.npy
+*.pkl
+*.pth
+*.ckpt
+predictions/
+features/
+embeddings/
+
+# OS / temp
+*.tmp
+*~

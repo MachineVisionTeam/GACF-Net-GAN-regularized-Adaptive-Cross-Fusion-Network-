@@ -1,0 +1,881 @@
+================================================================================
+GACF-NET — FULL ARCHITECTURE SPECIFICATION FOR PAPER WRITING
+A Two-Stage Nuclei Segmentation and Classification Framework
+
+This document is a paper-writing reference for every architectural component,
+its mathematical formulation, design rationale, and empirical contribution.
+================================================================================
+
+CONTENTS
+--------
+  0.  Overview and pipeline diagram
+  1.  Stage 1 — Segmentation
+        1.1  UNI ViT-L encoder
+        1.2  DPT decoder
+        1.3  Three task heads (HV, Sem3, Boundary)
+        1.4  PatchGAN discriminator (Phase 2 GAN regularization)
+        1.5  Test-Time Augmentation (TTA)
+        1.6  Watershed post-processing
+  2.  Per-nucleus feature extraction
+        2.1  Handcrafted morphology (71-d) — classical CV
+        2.2  UNI tight token (1024-d) — centroid pooling
+        2.3  UNI context tokens (1024-d) — bounding-box mean pooling
+  3.  Stage 2 — GACF-Net fusion (757K params)
+        3.1  Shared per-modality projections (d_proj=192)
+        3.2  GMU gating (Gated Multimodal Unit)
+        3.3  Cell-graph transformer (k=64, HEADLINE BLOCK)
+        3.4  MFB low-rank bilinear cross-block (parallel branch)
+        3.5  Classifier head (training-time only)
+  4.  XGBoost handoff and 6-mode ablation
+  5.  Training procedure (Stage 1 + Stage 2)
+  6.  Inference procedure
+  7.  Empirical contributions per component
+  8.  Glossary — what to call each component in prose
+
+
+================================================================================
+0. OVERVIEW AND PIPELINE DIAGRAM
+================================================================================
+
+GACF-Net is a two-stage pipeline for simultaneous nuclei segmentation and
+classification in H&E-stained histopathology images. Stage 1 produces predicted
+instance masks; Stage 2 classifies each predicted nucleus.
+
+Input:  256x256 RGB H&E patch
+Output: per-pixel instance label + per-nucleus class label
+
+Pipeline:
+
+  RAW H&E PATCH (256x256)
+        |
+        v
+  +-----------------------------------+
+  |   Stage 1: SEGMENTATION           |
+  |     UNI ViT-L (frozen)            |
+  |     DPT decoder                   |
+  |     HV + Sem3 + Boundary heads    |
+  |     (+ PatchGAN regularization)   |
+  |     TTA + watershed               |
+  +-----------------------------------+
+        |
+        v
+  PREDICTED INSTANCE MASK
+        |
+        +--> Per-nucleus feature extraction
+        |       Hand (71)  UNI tight (1024)  UNI ctx (1024)
+        v
+  +-----------------------------------+
+  |   Stage 2: GACF-NET FUSION      |
+  |     Shared projections (192)      |
+  |     GMU gating                    |
+  |     Cell-graph transformer (k=64) |
+  |     MFB cross-block (3 RAW pairs) |
+  |     -> graph_emb (192) + cross_emb (192) |
+  +-----------------------------------+
+        |
+        v
+  [ raw (2119) || graph_emb (192) || cross_emb (192) ] = 2503-d
+        |
+        v
+  +-----------------------------------+
+  |   XGBoost classifier              |
+  |   (cross-term-protecting config)  |
+  +-----------------------------------+
+        |
+        v
+  Per-nucleus class label
+
+Datasets evaluated: Lizard (6 classes, 5-fold CV, 568K nuclei),
+                    CoNSeP (4 classes, 5-fold CV, 24K nuclei),
+                    PanNuke (5 classes, 3-fold CV, 176K nuclei).
+
+
+================================================================================
+1. STAGE 1 — SEGMENTATION
+================================================================================
+
+Stage 1 takes a raw 256x256 H&E patch and produces a predicted instance mask.
+The architecture combines a frozen pathology foundation model encoder with a
+multi-scale dense decoder and three complementary task heads, trained under
+adversarial GAN regularization in a second-phase fine-tuning.
+
+------------------------------------------------------------
+1.1  UNI ViT-L encoder
+------------------------------------------------------------
+
+What it is:
+  Vision Transformer (ViT-Large) from the UNI foundation model
+  (MahmoodLab/uni, Chen et al., Nature Medicine 2024).
+
+How it is used:
+  - Pre-trained on 100M H&E patches from 100K WSIs across 20 tissue types via
+    DINOv2 self-supervised learning.
+  - FROZEN throughout Stage 1 training. We do not update its weights.
+  - Loaded via timm: `timm.create_model("hf-hub:MahmoodLab/uni", pretrained=True)`
+
+Tensor flow:
+  Input  : (B, 3, 256, 256) RGB in [0, 1], ImageNet mean/std normalized
+  Output : (B, 1024, 16, 16) spatial token grid
+           (each token = 1024-d embedding of a 16x16 pixel region)
+
+Why this choice (paper rationale):
+  - Foundation-model embeddings on H&E outperform ImageNet-pretrained CNNs
+    for downstream pathology tasks (cited: UNI paper).
+  - Freezing eliminates the ~300M parameters from optimization, dramatically
+    reducing memory and training compute.
+  - The 16x16 token grid retains spatial structure for dense prediction.
+
+Code: segmentation_code/shared/encoder.py
+
+
+------------------------------------------------------------
+1.2  DPT decoder
+------------------------------------------------------------
+
+What it is:
+  Dense Prediction Transformer (DPT, Ranftl et al. ICCV 2021) decoder.
+  Multi-scale: pulls features from multiple ViT-L blocks (depths 5, 11, 17, 23)
+  via timm's get_intermediate_layers() with reshape=True.
+
+How it works:
+  - Take features from 4 ViT-L blocks (early, mid, late, final).
+  - Each block output: (B, 1024, 16, 16).
+  - DPT progressively upsamples and fuses them via residual connections and
+    convolutional reassembly blocks to recover full 256x256 resolution.
+  - Final output: (B, hidden, 256, 256) high-resolution dense feature map.
+
+Why this choice:
+  - DPT was designed for dense prediction with ViT backbones (originally for
+    depth estimation), giving better dense-prediction quality than U-Net-style
+    decoders that only use the final ViT layer.
+  - Multi-scale ViT features capture both fine-grained nucleus boundaries
+    (early layers) and class-level semantics (late layers).
+
+Code: segmentation_code/shared/decoder_dpt.py
+
+
+------------------------------------------------------------
+1.3  Three task heads (HV, Sem3, Boundary)
+------------------------------------------------------------
+
+The DPT decoder feeds three parallel output heads. Together they enable
+instance-level nucleus separation in the watershed post-processing stage.
+
+(a) Horizontal-Vertical (HV) head
+    Output: 2 channels per pixel — horizontal and vertical gradient maps.
+            For each pixel inside a nucleus, the value encodes the normalized
+            distance from the pixel to the nucleus centroid along x and y.
+    Purpose: instance separation. The HV map provides a directional signal
+             that the watershed step uses to draw boundaries between touching
+             nuclei (HoVer-Net protocol, Graham et al. 2019).
+    Loss: smooth-L1 on inside-nucleus pixels; MSE on background ignored.
+
+(b) Sem3 head
+    Output: 3 channels softmax — {background, nucleus interior, nucleus boundary}.
+    Purpose: pixel-level semantic segmentation with explicit boundary class
+             to encourage sharp instance contours.
+    Loss: weighted multi-class cross-entropy (boundary class up-weighted ~3x).
+
+(c) Boundary head (auxiliary)
+    Output: 1 channel sigmoid — per-pixel "is this on a nucleus boundary".
+    Purpose: extra supervision signal to encourage the encoder/decoder to
+             attend to instance contours; helps under-segmentation.
+    Loss: binary focal loss.
+
+Total Stage-1 loss:
+   L_stage1 = lambda_hv * L_HV
+            + lambda_sem3 * L_Sem3
+            + lambda_bdry * L_Bdry
+            + (Phase 2 only) lambda_gan * L_GAN_continuous
+
+
+------------------------------------------------------------
+1.4  PatchGAN discriminator (Phase 2 GAN regularization)
+------------------------------------------------------------
+
+What it is:
+  PatchGAN critic (Isola et al. CVPR 2017, "pix2pix") adapted to act on the
+  CONTINUOUS HV+Sem3 output maps (not on the post-thresholded masks).
+  Mahmood-inspired: regularizes the predicted segmentation maps to look
+  realistic compared to ground-truth maps.
+
+Architecture:
+  - 4-layer convolutional discriminator (stride-2 each), LeakyReLU, InstanceNorm.
+  - Input: 5-channel (2 HV + 3 Sem3) prediction or ground-truth map.
+  - Output: (B, 1, H/16, W/16) per-patch realism scores.
+
+Training:
+  - Two-phase protocol: Phase 1 trains segmentation alone for N epochs;
+    Phase 2 adds the GAN with lambda_gan ~ 0.1.
+  - Adversarial loss: hinge GAN loss (Lim & Ye 2017).
+  - Discriminator updated once per generator step.
+
+Why this choice (paper rationale):
+  - Prevents over-confident "blurry boundary" predictions characteristic of
+    purely L1/L2-trained dense prediction networks.
+  - Improves sensitivity (SE) on small / low-contrast nuclei without
+    additional labels.
+
+Empirical effect (vs Phase 1 only):
+  - SE: +0.7 (Lizard) / +0.7 (CoNSeP) / +1.7 (PanNuke).
+  - AJI: roughly neutral (Phase 1 was already strong).
+
+Code: segmentation_code/shared/discriminator.py + train_*_phase2.py
+
+
+------------------------------------------------------------
+1.5  Test-Time Augmentation (TTA)
+------------------------------------------------------------
+
+D4 group test-time averaging — 8 orientations applied to each test patch:
+  identity, rot90, rot180, rot270, flip_h, flip_h+rot90, flip_h+rot180, flip_h+rot270
+
+Each orientation is run through Stage 1; the 8 predicted maps are inverse-
+transformed back to the original orientation and averaged.
+
+Purpose:
+  - Reduces orientation-dependent prediction bias.
+  - Smooths boundary predictions in regions where the model is uncertain.
+
+Empirical effect: ~+0.5-1.0 AJI consistently across datasets.
+
+Code: segmentation_code/{lizard,consep,pannuke}/inference_*_tta_v2.py
+
+
+------------------------------------------------------------
+1.6  Watershed post-processing
+------------------------------------------------------------
+
+Converts the 5-channel continuous prediction into discrete instance labels.
+
+Steps (per patch):
+  1. Threshold Sem3 [nucleus_interior > thr_fg] => binary nucleus mask.
+  2. Build marker map from HV gradient (peaks of HV magnitude).
+  3. Marker-controlled watershed (skimage) using the inverted nucleus mask
+     as topography and the HV markers as seeds.
+  4. Each watershed basin = one predicted nucleus instance.
+
+Per-dataset thresholds tuned via sweep_thresholds_lizard.py et al.
+
+This step has no learned parameters but is critical for converting the
+network's dense output into the instance maps that Stage 2 operates on.
+
+
+================================================================================
+2. PER-NUCLEUS FEATURE EXTRACTION
+================================================================================
+
+After Stage 1 produces the predicted instance mask, three feature streams
+are extracted per predicted nucleus. These are precomputed once and cached
+to H5 files; Stage 2 reads them directly.
+
+------------------------------------------------------------
+2.1  Handcrafted morphology (71-d)
+------------------------------------------------------------
+
+What it is:
+  71-d classical computer-vision descriptors per nucleus, organized in 8 groups:
+
+  Group                    | Dim | Examples
+  -------------------------|-----|----------------------------------------------
+  Shape & geometry         | 17  | area, perimeter, circularity, eccentricity,
+                           |     | solidity, elongation, axis lengths, Hu moments
+  Hematoxylin channel      | 12  | h_mean, h_std, h_median, percentiles, skew, kurt
+  RGB color                | 15  | per-channel mean/std/median/range + channel ratios
+  Grayscale intensity      |  5  | gray_mean, gray_std, gray_skew, gray_kurt, range
+  GLCM texture             |  8  | contrast, dissimilarity, homogeneity, energy,
+                           |     | correlation, ASM, entropy, mean
+  Eosin channel            |  6  | e_mean, e_std, e_median, range, skew, h_e_ratio
+  Boundary/contour         |  6  | roughness, convexity ratio, boundary intensity stats
+  LBP texture              |  2  | LBP uniformity, LBP entropy
+  -------------------------|-----|----------------------------------------------
+  Total                    | 71  |
+
+Extracted via:
+  - skimage (regionprops, graycomatrix, local_binary_pattern, rgb2hed)
+  - cv2 (color space ops)
+  - scipy (statistics)
+  - NO neural network — pure classical CV computation per mask.
+
+Source image: Reinhard-normalized H&E patch (color-normalized for stain
+              consistency before computing color statistics).
+
+Per-fold preprocessing applied BEFORE consumption by any model:
+  signed_log1p(x) = sign(x) * log1p(|x|)        # handles negative skewness +
+                                                # heavy magnitude tails
+  StandardScaler fit on TRAIN-labeled rows only # no test-fold leak
+
+Rationale for log1p + StandardScaler:
+  Raw handcrafted features span 9 orders of magnitude (e.g., area in pixels,
+  small unitless ratios). Without normalization, the L2 norm is dominated by
+  a handful of features, making pairwise cosine ~0.97 (essentially identical
+  vectors). This was identified as a systematic preprocessing bug in the
+  bug-fix session of this project.
+
+Code: segmentation_code/lizard/step2_extract_handcrafted_phase2_reinhard.py
+      (similar versions for CoNSeP and PanNuke)
+
+
+------------------------------------------------------------
+2.2  UNI tight token (1024-d)
+------------------------------------------------------------
+
+What it is:
+  Single UNI ViT-L token vector at the nucleus centroid, capturing fine-grained
+  per-nucleus appearance.
+
+Extraction:
+  Patch (256x256, RAW H&E — NOT Reinhard) -> UNI ViT-L -> token grid (1024, 16, 16)
+  For each nucleus:
+      cy, cx = mean of mask pixel coordinates    # centroid
+      ty, tx = cy // 16, cx // 16                # token coordinates
+      tight = token_grid[:, ty, tx]              # (1024,)
+
+Per-fold preprocessing:
+  StandardScaler fit on TRAIN-labeled rows only. NO PCA.
+
+Rationale for no PCA:
+  The bug-fix session showed that PCA-64 retains only 57% of total variance on
+  UNI features, and the discarded directions contain exactly the rare-class
+  discriminative signal. PCA-64 on UNI gave 0% F1 on Eosinophil and Neutrophil
+  on Lizard; raw 1024-d + StandardScaler recovers them to 50%+ on linear probe.
+
+Code: segmentation_code/shared/encoder.py + extraction scripts in
+      code/bhfnet/extract_uni_features_{consep,pannuke}.py and
+      code/fusion_lizard/step3_extract_uni_features_lizard.py
+
+
+------------------------------------------------------------
+2.3  UNI context tokens (1024-d)
+------------------------------------------------------------
+
+What it is:
+  Mean of UNI ViT-L tokens overlapping the nucleus bounding box plus a 1-token
+  margin on each side. Captures local tissue context around the nucleus.
+
+Extraction:
+  Same UNI ViT-L token grid as Section 2.2.
+  For each nucleus with bbox (ymin..ymax, xmin..xmax):
+      ty1 = max(0, ymin // 16 - 1)
+      tx1 = max(0, xmin // 16 - 1)
+      ty2 = min(16, ymax // 16 + 2)
+      tx2 = min(16, xmax // 16 + 2)
+      ctx = mean over token_grid[:, ty1:ty2, tx1:tx2]    # (1024,)
+
+Per-fold preprocessing: same as tight (StandardScaler, no PCA).
+
+Rationale:
+  Complementary to tight. The centroid token captures nucleus interior;
+  the bbox-mean tokens incorporate surrounding tissue (stroma, neighboring
+  cells, boundary appearance) that determines class for context-dependent
+  classes (e.g., Connective vs Stromal Spindle).
+
+
+================================================================================
+3. STAGE 2 — GACF-NET FUSION (757K parameters, under 800K budget)
+================================================================================
+
+The Stage 2 fusion model takes the three per-nucleus streams (hand, tight,
+ctx) and produces TWO output embeddings (graph_emb, cross_emb) per nucleus.
+Both are concatenated with the raw streams and passed to XGBoost for the
+final class prediction.
+
+Architecture overview:
+
+  hand(71)  tight(1024)  ctx(1024)
+     |          |           |
+     v          v           v
+  +-------------------------------+
+  |  Step 3.1: Shared projections |   d_proj=192 + tanh   ~408K params
+  +-------------------------------+
+            |
+       +----+-----+
+       |          |
+       v          v
+  +---------+ +---------------+
+  | Step    | | Step 3.4      |
+  | 3.2 GMU | | MFB cross-    |
+  | gating  | | block (3 RAW  |
+  | (113K)  | | pairs)        |  ~5K (params mostly in shared projections)
+  +----+----+ +-------+-------+
+       v             v
+  +---------+        |
+  | Step    |        |
+  | 3.3     |        |
+  | Cell-   |        |
+  | graph   |        |
+  | trans-  |        |
+  | former  |        |
+  | (297K)  |        |
+  | HEAD-   |        |
+  | LINE    |        |
+  +----+----+        |
+       v             v
+   graph_emb (192) cross_emb (192)
+       |             |
+       +------+------+
+              v
+  +------------------------+
+  | Step 3.5: Classifier   |   ~50K params
+  | head (training only)   |
+  +------------------------+
+              v
+       logits (num_classes)
+       (discarded at handoff;
+        graph_emb + cross_emb
+        forwarded to XGBoost)
+
+------------------------------------------------------------
+3.1  Shared per-modality projections (d_proj=192)
+------------------------------------------------------------
+
+What it is:
+  ONE linear projection per modality, used both by the main branch and by
+  the cross-block. Output dim 192 for all modalities; tanh activation.
+
+   h = tanh( LayerNorm( W_h @ hand  + b_h ) )    # (N, 192)
+   t = tanh( LayerNorm( W_t @ tight + b_t ) )    # (N, 192)
+   c = tanh( LayerNorm( W_c @ ctx   + b_c ) )    # (N, 192)
+   (Light dropout 0.3 applied in training only.)
+
+Why shared (not separate per branch):
+  Alignment requirement. The Hadamard product `proj_a (.) proj_b` is only
+  meaningful if dimension i of proj_a corresponds to the same conceptual
+  axis as dimension i of proj_b. Sharing the projection across the GMU
+  branch and the cross-block branch guarantees one coordinate system per
+  modality. Separate per-branch projections would fragment alignment and
+  the products would be near-noise. This is the standard pattern in MFB
+  literature (HFBSurv, Pathomic Fusion).
+
+Why d_proj=192:
+  Three constraints met simultaneously:
+  - Divisible by k=3 (MFB sum-pool factor) for clean 64-d per cross-pair.
+  - Small enough that the cross-block stays under ~410K params.
+  - Large enough that 64-d sum-pooled output retains meaningful interaction
+    capacity.
+
+Replaces PCA:
+  PCA is UNSUPERVISED — keeps directions of maximum variance regardless of
+  classification utility. A learned linear projection is SUPERVISED via
+  back-propagation through the downstream classifier loss, so it can keep
+  directions that carry class information even if those directions have low
+  marginal variance.
+
+Param count: ~408K of the 757K total — the projections dominate parameter
+              budget because tight and ctx are 1024-d.
+
+
+------------------------------------------------------------
+3.2  GMU gating (Gated Multimodal Unit)
+------------------------------------------------------------
+
+What it is:
+  Gated Multimodal Unit (Arevalo et al. 2017) — a lightweight softmax gate
+  that produces a per-nucleus weighted sum of the three projected streams.
+
+Equations:
+   gate_logits  = W_g @ concat(h, t, c) + b_g    # (N, 3)
+   alpha        = softmax(gate_logits)           # (N, 3), per-row sums to 1
+   gated        = alpha[:,0]*h + alpha[:,1]*t + alpha[:,2]*c    # (N, 192)
+
+Purpose:
+  Per-nucleus modality weighting. The model learns to trust the hand stream
+  more for some nuclei (e.g., distinctive granulocytes) and the tight/ctx
+  stream more for others. Replaces the cross-gating block of the depth-exam
+  fusion (which used learnable gates per stream and was heavier).
+
+Why lightweight here:
+  Total ~1.7K params for the gate projection itself. The "weighting" power
+  comes from the learned projections (3.1) — GMU is just the per-sample mixer.
+
+Param count: ~113K (mostly in any internal Linear; gate projection alone is
+              tiny; here ~113K is the total GMU + post-norm cost).
+
+
+------------------------------------------------------------
+3.3  Cell-graph transformer (k=64 neighbors, HEADLINE BLOCK)
+------------------------------------------------------------
+
+What it is:
+  A transformer with sparse attention restricted to each nucleus's 64
+  nearest neighbors in (centroid) space, computed per patch.
+
+Why this is the HEADLINE block:
+  XGBoost classifies each nucleus INDEPENDENTLY — it cannot see neighbors.
+  The graph transformer is the only architectural element that adds
+  inter-nucleus information. Whatever value the fusion model contributes
+  beyond raw concat MUST come from this block.
+
+Architecture:
+  - d_model = 192 (matches projection dim).
+  - n_heads = 4 (each head dim = 48).
+  - n_layers = 1 (one transformer layer; budget-driven).
+  - Pre-norm: LayerNorm before attention, then residual.
+  - FFN expansion 2x, GELU activation, dropout 0.3.
+
+Graph construction (per patch, no learned params):
+  For each patch with N nuclei:
+    1. Compute pairwise Euclidean distance between all nucleus centroids.
+    2. For each nucleus i, find the k=64 nearest neighbors (or all N-1
+       if fewer than 65 nuclei in the patch).
+    3. Build edge list (i, neighbor_j) for both directions (symmetric).
+
+Sparse attention (per edge):
+  For each edge (src, dst):
+      q_dst = projection_Q(x[dst])         # (n_heads, d_head)
+      k_src = projection_K(x[src])
+      v_src = projection_V(x[src])
+      score = (q_dst . k_src) / sqrt(d_head)
+  Softmax over each dst's incoming edges (using scatter_softmax).
+  Aggregate v_src weighted by alpha:
+      out[dst] = sum_{src in N(dst)} alpha[edge] * v_src
+
+Implementation:
+  - PyTorch scatter ops (index_add_, index_reduce_) over edge_index.
+  - No PyTorch Geometric dependency; pure-PyTorch graph attention with O(E)
+    memory rather than O(N^2) full attention.
+
+Why k=64:
+  - k=8 (depth-exam baseline) was too small a receptive field for context-
+    heavy classes (Epithelial, Plasma, Connective).
+  - k=64 typically covers a meaningful tissue neighborhood at 256x256
+    resolution (e.g., ~half the nuclei in a dense patch).
+
+Param count: ~297K (the largest single component besides the projections).
+
+
+------------------------------------------------------------
+3.4  MFB low-rank bilinear cross-block (parallel branch)
+------------------------------------------------------------
+
+What it is:
+  Three Multi-modal Factorized Bilinear (MFB) tails (Yu et al. ICCV 2017),
+  one per pair of RAW modalities: (hand, tight), (hand, ctx), (tight, ctx).
+
+  Each tail computes a low-rank approximation to the outer product of two
+  projected modality vectors, giving multiplicative interaction features
+  for XGBoost to consume.
+
+Why pairs of RAW modalities (not graph_emb x modality):
+  The graph_emb already encodes information from all three modalities (it
+  is the output of GMU + transformer over those modalities). Multiplying
+  graph_emb by a raw modality would re-multiply information the graph branch
+  already captured (redundant). The right cross-pairs are pairwise RAW —
+  standard in all bilinear fusion literature (TFN, LMF, MFB, MUTAN,
+  Pathomic Fusion, HFBSurv).
+
+Per-pair computation (for pair (a, b) in {(h,t), (h,c), (t,c)}):
+   had       = a (.) b                              # (N, 192), Hadamard
+   sum_pool  = sum over k=3 groups along dim 192    # (N, 64)
+   dropped   = Dropout(p=0.4)(sum_pool)             # (N, 64)
+   sq        = sign(dropped) * sqrt(|dropped| + 1e-8)    # signed sqrt
+   normed    = L2-normalize along last dim          # (N, 64)
+
+Concatenate 3 pair outputs:
+   cross_emb = concat(cross_ht, cross_hc, cross_tc)   # (N, 192)
+
+Why each operation:
+  Hadamard:           Element-wise multiplication = factorized bilinear pooling
+                      (replaces full outer product, ~26x fewer params than
+                      Kronecker).
+  Sum-pool over k=3:  MFB's compression mechanism; trades width for depth of
+                      interaction.
+  Signed sqrt + L2:   Stabilizes scale of multiplicative features so they
+                      don't dominate XGBoost splits via magnitude.
+
+Why k=3 (not Yu et al.'s default k=5):
+  d_proj=192 must be divisible by k. k=3 gives 64-d output per pair x 3 pairs
+  = 192-d cross-block, matching the spec's target. k=5 would give a non-
+  integer output.
+
+Param count: ~5K (the projections live in 3.1 — shared). The MFB tails
+              themselves are mostly parameter-free reshape/sum/normalize ops.
+
+
+------------------------------------------------------------
+3.5  Classifier head (training-time only; discarded at handoff)
+------------------------------------------------------------
+
+What it is:
+  Small MLP that takes the concatenated graph_emb + cross_emb and outputs
+  per-class logits.
+
+Architecture:
+  fused   = concat(graph_emb, cross_emb)              # (N, 384)
+  hidden  = Dropout(GELU(LayerNorm(Linear(384, 128))))
+  logits  = Linear(128, num_classes)
+
+Purpose:
+  Provides the gradient signal that trains all upstream components
+  (projections, GMU, transformer, cross-block) via standard backprop with
+  class-balanced focal loss + balanced softmax (Section 5).
+
+Usage at inference / handoff:
+  DISCARDED. After training, only graph_emb and cross_emb are extracted per
+  nucleus and forwarded to XGBoost.
+
+Why XGBoost instead of this MLP at inference:
+  XGBoost on raw concat features was already 51.45 (Lizard) without any
+  fusion. Training a neural head to beat XGBoost on tabular per-instance
+  features is hard. Using the fusion model as a REPRESENTATION LEARNER and
+  keeping XGBoost as the final classifier preserves the strong baseline
+  while adding only the fusion model's specific contributions on top.
+
+Param count: ~50K.
+
+
+------------------------------------------------------------
+TOTAL Stage 2 PARAMETER COUNT
+------------------------------------------------------------
+
+  Component                            Params       % of total
+  -------------------------------------|------------|------------
+  Shared projections (Step 3.1)        | 408K       | 54%
+  Cell-graph transformer (Step 3.3)    | 297K       | 39%
+  GMU gating (Step 3.2)                | 113K       |  15% (incl norms)
+  Classifier head (Step 3.5)           |  50K       |   7%
+  MFB cross-block (Step 3.4)           |   5K       |   1%
+  -------------------------------------|------------|------------
+  TOTAL                                | 757K       | under 800K budget
+
+
+================================================================================
+4. XGBOOST HANDOFF AND 6-MODE ABLATION
+================================================================================
+
+After Stage 2 training, for each nucleus the model emits two embeddings:
+   graph_emb (192)  and  cross_emb (192)
+
+These are concatenated with the raw features and handed to XGBoost.
+
+   Final XGBoost input (HEADLINE configuration, called "+cross" in tables):
+     X = [ hand_scaled (71) || tight_std (1024) || ctx_std (1024)
+          || graph_emb (192) || cross_emb (192) ]
+       = 2503-d per nucleus
+
+XGBoost hyperparameters (per the cross-term spec):
+   n_estimators       = 400
+   max_depth          = 6
+   learning_rate      = 0.1
+   subsample          = 0.85
+   min_child_weight   = 5
+   colsample_bytree   = 0.7
+   colsample_bylevel  = 1.0     # OFF — protects multiplicative signal
+   colsample_bynode   = 1.0     # OFF — protects multiplicative signal
+   reg_lambda         = 1.5     # heavier reg for heavy-tailed cross-terms
+   objective          = 'multi:softprob'
+   tree_method        = 'hist'
+   device             = 'cuda:0'
+
+Why colsample_bylevel/bynode = 1.0:
+  Intra-tree column subsampling can sever the two factors of a multiplicative
+  feature into different sub-samples within the same tree, destroying the
+  multiplicative signal during training. Documented to cause up to 54%
+  performance drops on ratio/product signals. Tree-level subsampling
+  (colsample_bytree=0.7) remains for generalization.
+
+ABLATION MODES (6 total per dataset):
+
+  Mode               | XGBoost input                                     | Dim   | Tests
+  -------------------|---------------------------------------------------|-------|----------
+  hand               | hand_scaled only                                  |  71   | morphology alone
+  deep               | tight_std + ctx_std                               | 2048  | UNI alone
+  raw                | hand_scaled + tight_std + ctx_std                 | 2119  | no fusion
+  +graph             | raw + graph_emb                                   | 2311  | spatial context
+  +cross (HEADLINE)  | raw + graph_emb + cross_emb                       | 2503  | + bilinear interactions
+  +random (NULL CTRL)| raw + graph_emb + Gaussian noise (192)            | 2503  | proves gain comes from STRUCTURE
+                                                                                    not column count
+
+
+================================================================================
+5. TRAINING PROCEDURE
+================================================================================
+
+------------------------------------------------------------
+5.1  Stage 1 training
+------------------------------------------------------------
+
+Phase 1 (no GAN):
+  - Optimizer: AdamW, lr=2e-4, weight decay=1e-4.
+  - Schedule: cosine annealing to lr=1e-6 over 100 epochs.
+  - Batch: 8 patches per GPU.
+  - Augmentation: horizontal/vertical flip, 90-deg rotations, color jitter.
+  - Loss: lambda_hv * L_HV + lambda_sem3 * L_Sem3 + lambda_bdry * L_Bdry.
+  - Encoder frozen throughout.
+
+Phase 2 (GAN regularization):
+  - Initialize from Phase 1 checkpoint.
+  - Optimizer: AdamW lr=1e-4 for generator, lr=1e-4 for discriminator.
+  - Schedule: cosine to 1e-6 over 50 epochs.
+  - Add adversarial loss with lambda_gan=0.1 (hinge loss on continuous maps).
+  - Discriminator step every generator step.
+
+Per-fold: trained separately for each fold (5-fold for Lizard/CoNSeP,
+3-fold for PanNuke). Total Stage 1 training time per dataset: ~6-12 hours
+on a single L40 GPU.
+
+
+------------------------------------------------------------
+5.2  Stage 2 training (GACF-Net fusion)
+------------------------------------------------------------
+
+Per fold (5 for Lizard/CoNSeP, 3 for PanNuke):
+
+  Optimizer:      AdamW, lr=1e-3, weight decay=1e-4
+  Schedule:       Cosine annealing to lr=1e-5 over 40 epochs
+  Batch:          8 patches per batch (variable # nuclei per patch)
+  Gradient clip:  max_norm=1.0
+
+  Loss:           CB-focal (class-balanced focal, Cui et al. 2019)
+                  + balanced softmax (Ren et al. 2020) logit adjustment
+
+      CB-focal:    beta=0.999, gamma=2.0
+                   effective number per class -> per-class weights
+                   normalized to mean=1, sum=C
+
+      Balanced SM: adjusted_logits = logits + log(prior_per_class)
+                   (where prior is the train-fold per-class frequency)
+
+  Regularization:
+      - Dropout 0.4 in transformer + classifier head, 0.3 in projections.
+      - Weight decay 1e-4 (AdamW).
+      - Modality dropout p=0.15: per training step, with probability 0.15
+        randomly zero out one entire input stream (hand, tight, or ctx)
+        across the whole batch. Forces the model to not over-rely on any
+        single modality.
+
+  Train only on labeled nuclei (gt_class > 0); background nuclei (unmatched
+  predictions, gt_class=0) are still included in the batch for graph context
+  but excluded from the loss.
+
+  Wall-clock per fold:
+      CoNSeP : ~30 sec (24K nuclei, 144 patches/fold)
+      PanNuke: ~4 min   (176K nuclei, 880 patches/fold)
+      Lizard : ~5 min   (568K nuclei, 996 patches/fold)
+
+
+------------------------------------------------------------
+5.3  Embedding extraction
+------------------------------------------------------------
+
+After training each fold:
+  - Switch model to eval mode (no dropout, no modality dropout).
+  - Forward all nuclei (train + test, labeled + unlabeled) through the
+    fusion model.
+  - Save graph_emb (N, 192) and cross_emb (N, 192) to .npz file.
+  - These embeddings are then concatenated with raw features at the
+    XGBoost handoff step.
+
+
+================================================================================
+6. INFERENCE PROCEDURE
+================================================================================
+
+For a new test patch:
+
+  Step 1: Stage 1 segmentation
+      - Apply D4 TTA (8 orientations).
+      - Run each through UNI ViT-L + DPT decoder.
+      - Average the 8 inverse-transformed HV+Sem3 outputs.
+      - Apply marker-controlled watershed -> instance mask.
+
+  Step 2: Per-nucleus feature extraction
+      - Reinhard-normalize patch.
+      - For each predicted nucleus:
+          * Compute 71-d handcrafted features (classical CV).
+          * Run UNI on raw H&E patch (not Reinhard).
+          * Extract tight (token at centroid) and ctx (mean bbox tokens).
+      - Apply per-fold StandardScaler (loaded from training).
+
+  Step 3: Stage 2 fusion
+      - Forward through trained GACF-Net.
+      - Extract graph_emb (192) and cross_emb (192) per nucleus.
+
+  Step 4: Classification
+      - Concatenate [raw (2119) || graph_emb (192) || cross_emb (192)].
+      - Predict class with trained XGBoost.
+
+
+================================================================================
+7. EMPIRICAL CONTRIBUTIONS PER COMPONENT
+================================================================================
+
+What each component contributes (averaged across 3 datasets, Convention C):
+
+  Component / decision                | Contribution      | Notes
+  ------------------------------------|-------------------|--------------------------
+  UNI ViT-L over ImageNet ResNet      | not measured here | (foundation model >> ImageNet)
+  Raw 1024-d UNI vs PCA-64            | +30 F1 (Lizard    | from bug-fix session;
+                                      | linear probe)     | rare classes 0% -> 50%+
+  signed_log1p + StandardScaler hand  | +38 F1 (Lizard    | from bug-fix session;
+                                      | linear probe)     | naive consumption was 11.05
+  Reinhard normalization on hand only | small             | minor SE/AJI boost
+  Phase 2 GAN regularization          | SE +0.7-+1.7      | bigger effect on PanNuke
+  D4 TTA                              | AJI +0.5-+1.0     | consistent across datasets
+
+  hand-only -> +UNI (deep features)   | +10 to +19 F1     | DOMINANT lever
+  hand+UNI (raw) vs deep alone        | +6.41 (Lizard)    | hand helps on Lizard only
+                                      |  0   (CoNSeP/PN)  | redundant on others
+
+  Cell-graph transformer (vs raw)     | +0.24 (Lizard)    | small positive
+                                      | -1.08 (CoNSeP)    | slight hurt
+                                      | -0.99 (PanNuke)   | slight hurt
+
+  MFB cross-block (vs +graph)         | +0.16 (Lizard)    | small positive
+                                      |  0   (CoNSeP)     | noise
+                                      | +0.08 (PanNuke)   | noise
+
+  Full fusion (+cross) vs +random ctl | +0.14 (Lizard)    | bilinear STRUCTURE adds
+                                      | +0.05 (CoNSeP)    | only marginal real signal
+                                      | +0.12 (PanNuke)   | over noise of same dim
+
+The honest summary: foundation-model embeddings (UNI) and preprocessing
+correctness account for almost all gains. The neural fusion architecture
+adds at most 0.4 F1 and on 2 of 3 datasets slightly hurts.
+
+
+================================================================================
+8. GLOSSARY — WHAT TO CALL EACH COMPONENT IN PROSE
+================================================================================
+
+In a paper, use these terms consistently:
+
+  Component                  | Suggested paper name
+  ---------------------------|----------------------------------------------------------
+  Whole pipeline             | GACF-Net (or Boundary-aware Heterogeneous Fusion Network)
+  Stage 1 (whole)            | GACF-Net Stage 1 segmentation pipeline
+  Stage 2 fusion network     | GACF-Net fusion module
+  UNI ViT-L encoder          | Frozen UNI foundation-model encoder (Chen et al. 2024)
+  DPT decoder                | Dense Prediction Transformer decoder (Ranftl et al. 2021)
+  PatchGAN discriminator     | Mahmood-style PatchGAN adversarial regularization
+  HV+Sem3+Boundary heads     | Three task heads following the HoVer-Net protocol
+                             | (Graham et al. 2019)
+  TTA                        | D4 test-time augmentation
+  Hand-crafted features      | 71-d handcrafted morphology, color, and texture
+                             | descriptors
+  UNI tight feature          | UNI patch-token at the nucleus centroid
+  UNI context feature        | Mean of UNI tokens over the nucleus bounding box + 1
+  Shared projections         | Per-modality projection heads with shared parameters
+  GMU gating                 | Gated Multimodal Unit (Arevalo et al. 2017)
+  Cell-graph transformer     | k-NN cell-graph transformer with sparse attention
+  Cross-block                | Low-rank multiplicative cross-block via MFB
+                             | factorization (Yu et al. 2017)
+  Null control               | Random-projection ablation of equivalent dimension
+  Final classifier           | XGBoost classifier with cross-term-protecting
+                             | hyperparameters
+
+Citations to include:
+  - Chen et al. (2024) — UNI foundation model, Nature Medicine
+  - Ranftl et al. (2021) — DPT decoder, ICCV
+  - Isola et al. (2017) — PatchGAN, CVPR
+  - Graham et al. (2019) — HoVer-Net, Medical Image Analysis
+  - Arevalo et al. (2017) — Gated Multimodal Units
+  - Yu et al. (2017) — MFB low-rank bilinear pooling, ICCV
+  - Cui et al. (2019) — Class-balanced focal loss, CVPR
+  - Ren et al. (2020) — Balanced softmax for long-tail learning
+  - Naing et al. (2026) — AGAFNet, IEEE TIP (the comparison baseline)
+
+
+================================================================================
+END OF ARCHITECTURE SPEC
+================================================================================
