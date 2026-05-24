@@ -85,7 +85,7 @@ See `reports/GACF_NET_METRICS_SPEC.txt` for full metric definitions and pseudoco
 
 ---
 
-## Headline results (Convention C macro F1)
+## Headline results 
 
 | Dataset | AGAFNet Paper | AGAFNet Repl | **hand** | **deep** | **raw** (hand+deep) | **+graph** | **+cross** (headline) | **+random** (null) |
 |---|---|---|---|---|---|---|---|---|
