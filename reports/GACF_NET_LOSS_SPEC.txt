@@ -1,0 +1,307 @@
+================================================================================
+GACF-NET — LOSS FUNCTIONS SPECIFICATION FOR PAPER WRITING
+LaTeX-ready equations for every loss used in this work.
+
+The equations below are written in plain text; the LaTeX form is given in
+backticks so it can be pasted directly into a paper.
+
+All formulas verified against the actual training code.
+================================================================================
+
+CONTENTS
+--------
+  1.  Stage 1 — Segmentation losses
+        1.1  L_HV   — horizontal-vertical regression
+        1.2  L_Sem3 — 3-class semantic CE (bg / interior / boundary)
+        1.3  L_Bdry — binary boundary focal
+        1.4  L_GAN  — Phase-2 hinge GAN on continuous output maps
+        1.5  L_stage1 — total composite loss
+  2.  Stage 2 — Classification losses
+        2.1  L_CB-focal — class-balanced focal loss (Cui et al. 2019)
+        2.2  L_BalSM   — balanced softmax logit adjustment (Ren et al. 2020)
+        2.3  L_stage2  — composed loss used to train GACF-Net Stage 2
+
+
+================================================================================
+1. STAGE 1 — SEGMENTATION LOSSES
+================================================================================
+
+Stage 1 produces three predictions per pixel:
+  - HV map     H_pred in R^{2 x H x W}   (per-pixel horizontal+vertical
+                                          gradient to nucleus centroid)
+  - Sem3 map   S_pred in R^{3 x H x W}   (softmax over {bg, interior,
+                                          boundary})
+  - Boundary   B_pred in R^{1 x H x W}   (sigmoid per-pixel boundary)
+
+Ground truth:
+  H_gt   in R^{2 x H x W} (zeros outside nuclei)
+  S_gt   in {0, 1, 2}^{H x W}    (3 classes, hard labels)
+  B_gt   in {0, 1}^{H x W}       (binary boundary)
+  M_fg   in {0, 1}^{H x W}       (foreground mask = 1 if pixel is inside a
+                                  nucleus; used to mask the HV loss)
+
+------------------------------------------------------------
+1.1  L_HV — horizontal-vertical regression
+------------------------------------------------------------
+
+Smooth-L1 inside nuclei + MSE penalty on the gradient of the prediction
+to encourage smooth maps (HoVer-Net protocol).
+
+Plain text:
+   L_HV = (1 / |M_fg|) * sum_{pixels p in M_fg}
+          [  smooth_L1( H_pred(p), H_gt(p) )
+           + lambda_grad * || grad H_pred(p) - grad H_gt(p) ||_2^2 ]
+
+LaTeX (`L_{\text{HV}}`):
+   \mathcal{L}_{\text{HV}} =
+     \frac{1}{|M_{\text{fg}}|}
+     \sum_{p \in M_{\text{fg}}}
+     \Big[
+       \mathrm{smooth}_{L_1}\!\big( H_{\text{pred}}(p), H_{\text{gt}}(p) \big)
+       + \lambda_{\nabla}\,
+         \| \nabla H_{\text{pred}}(p) - \nabla H_{\text{gt}}(p) \|_2^2
+     \Big]
+
+Constants:
+   lambda_grad = 1.0
+   smooth_L1 transition at delta = 1.0
+   gradient computed via Sobel on H and V channels separately
+
+------------------------------------------------------------
+1.2  L_Sem3 — 3-class semantic cross-entropy
+------------------------------------------------------------
+
+Pixel-wise multi-class cross-entropy with the boundary class up-weighted
+to encourage sharp instance contours.
+
+Plain text:
+   L_Sem3 = - (1 / |H W|) * sum_{p} sum_{c in {0,1,2}}
+                  w_c * 1[S_gt(p) = c] * log( softmax(S_pred)(p, c) )
+
+LaTeX:
+   \mathcal{L}_{\text{Sem3}} =
+     - \frac{1}{HW} \sum_{p} \sum_{c=0}^{2}
+       w_c \cdot \mathbf{1}[S_{\text{gt}}(p) = c]
+       \cdot \log \big( \mathrm{softmax}(S_{\text{pred}})_{p,c} \big)
+
+Class weights w_c:
+   w_0 (background)         = 1.0
+   w_1 (nucleus interior)   = 1.0
+   w_2 (nucleus boundary)   = 3.0    # up-weighted
+
+------------------------------------------------------------
+1.3  L_Bdry — binary boundary focal loss
+------------------------------------------------------------
+
+Per-pixel binary focal loss on the auxiliary boundary head.
+
+Plain text:
+   p     = sigmoid( B_pred )
+   pt    = p if B_gt = 1 else 1 - p
+   alpha = a if B_gt = 1 else 1 - a
+   L_Bdry = -(1 / |H W|) * sum_{p}
+              alpha * (1 - pt)^gamma * log(pt)
+
+LaTeX:
+   p_t = \begin{cases} \sigma(B_{\text{pred}}(p)) & B_{\text{gt}}(p) = 1 \\
+                       1 - \sigma(B_{\text{pred}}(p)) & B_{\text{gt}}(p) = 0
+         \end{cases}
+
+   \mathcal{L}_{\text{Bdry}} =
+     - \frac{1}{HW} \sum_{p}
+       \alpha_{p} \, (1 - p_t)^{\gamma} \, \log(p_t)
+
+Constants:
+   alpha = 0.25
+   gamma = 2.0
+   (Standard focal-loss defaults; Lin et al. 2017)
+
+------------------------------------------------------------
+1.4  L_GAN — Phase-2 hinge GAN on continuous output maps
+------------------------------------------------------------
+
+The PatchGAN discriminator D operates on the 5-channel CONTINUOUS output
+(2 HV + 3 Sem3 channels), NOT on post-thresholded masks. This is the
+"Mahmood-style" adversarial regularization that improves SE on small /
+low-contrast nuclei.
+
+Concatenated output map:
+   Y_pred = [ H_pred ; S_pred ] in R^{5 x H x W}
+   Y_gt   = [ H_gt   ; S_gt_onehot ] in R^{5 x H x W}
+
+Hinge GAN losses (Lim & Ye 2017):
+
+   Discriminator loss:
+   L_D = E_{Y_gt}   [ max(0, 1 - D(Y_gt)) ]
+       + E_{Y_pred} [ max(0, 1 + D(Y_pred)) ]
+
+   Generator loss (added to L_stage1 in Phase 2):
+   L_GAN_G = - E_{Y_pred} [ D(Y_pred) ]
+
+LaTeX:
+   \mathcal{L}_D =
+     \mathbb{E}_{Y_{\text{gt}}}\!\big[ \max(0,\, 1 - D(Y_{\text{gt}})) \big]
+     + \mathbb{E}_{Y_{\text{pred}}}\!\big[ \max(0,\, 1 + D(Y_{\text{pred}})) \big]
+
+   \mathcal{L}_{\text{GAN}} =
+     - \mathbb{E}_{Y_{\text{pred}}}\!\big[ D(Y_{\text{pred}}) \big]
+
+Discriminator D:
+   4-layer convolutional PatchGAN, stride-2 each, InstanceNorm,
+   LeakyReLU(0.2) activations.
+   Output: (B, 1, H/16, W/16) per-patch realism scores.
+
+------------------------------------------------------------
+1.5  L_stage1 — total composite loss
+------------------------------------------------------------
+
+Phase 1 (no GAN):
+   L_stage1_phase1 = lambda_hv * L_HV
+                   + lambda_sem3 * L_Sem3
+                   + lambda_bdry * L_Bdry
+
+Phase 2 (warm-start from Phase 1, add adversarial term):
+   L_stage1_phase2 = L_stage1_phase1 + lambda_gan * L_GAN
+
+LaTeX:
+   \mathcal{L}_{\text{Stage-1}}^{\text{Phase 1}} =
+     \lambda_{\text{HV}}\,\mathcal{L}_{\text{HV}}
+     + \lambda_{\text{Sem3}}\,\mathcal{L}_{\text{Sem3}}
+     + \lambda_{\text{Bdry}}\,\mathcal{L}_{\text{Bdry}}
+
+   \mathcal{L}_{\text{Stage-1}}^{\text{Phase 2}} =
+     \mathcal{L}_{\text{Stage-1}}^{\text{Phase 1}}
+     + \lambda_{\text{GAN}}\,\mathcal{L}_{\text{GAN}}
+
+Constants:
+   lambda_hv   = 1.0
+   lambda_sem3 = 1.0
+   lambda_bdry = 0.5
+   lambda_gan  = 0.1    (Phase 2 only)
+
+
+================================================================================
+2. STAGE 2 — CLASSIFICATION LOSSES
+================================================================================
+
+Stage 2 takes per-nucleus features and produces per-class logits z in R^C.
+Ground-truth class y in {1, ..., C} (we use 0-indexed in code: y = gt - 1).
+
+Let n_c = number of training samples of class c on the current training
+fold (used both by CB-focal weighting and balanced softmax adjustment).
+
+------------------------------------------------------------
+2.1  L_CB-focal — class-balanced focal loss (Cui et al. 2019)
+------------------------------------------------------------
+
+Step 1: effective number per class:
+   E_c = (1 - beta^{n_c}) / (1 - beta)
+
+Step 2: per-class weight (normalized so sum_c w_c = C):
+   w_c = ((1 - beta) / (1 - beta^{n_c}))   * (C / sum_k (1 - beta) / (1 - beta^{n_k}))
+
+Step 3: standard focal loss with class weight:
+   p_t   = softmax(z)[true_class]
+   alpha = w_{true_class}
+   L_CB-focal = - alpha * (1 - p_t)^gamma * log(p_t)
+
+LaTeX:
+   E_c = \frac{1 - \beta^{n_c}}{1 - \beta}
+
+   w_c = \frac{1/E_c}{\sum_{k=1}^{C} 1/E_k} \cdot C
+
+   \mathcal{L}_{\text{CB-focal}} =
+     - w_y \, (1 - p_y)^{\gamma} \, \log p_y,
+     \quad p_y = \mathrm{softmax}(z)_y
+
+Constants:
+   beta  = 0.999
+   gamma = 2.0
+
+------------------------------------------------------------
+2.2  L_BalSM — balanced softmax logit adjustment (Ren et al. 2020)
+------------------------------------------------------------
+
+A per-class additive correction to the logits BEFORE softmax / loss,
+accounting for the long-tailed class distribution on the training fold.
+
+   pi_c = n_c / sum_k n_k      # empirical class prior
+   z_adj = z + tau * log(pi)   # per-class log-prior added to logits
+   p     = softmax(z_adj)
+   L     = - log p[true_class] (or composed with focal — see 2.3)
+
+LaTeX:
+   \pi_c = \frac{n_c}{\sum_{k=1}^{C} n_k}
+   \tilde{z} = z + \tau \cdot \log \pi
+   p = \mathrm{softmax}(\tilde{z})
+
+Constants:
+   tau = 1.0
+
+------------------------------------------------------------
+2.3  L_stage2 — composed loss used to train GACF-Net Stage 2
+------------------------------------------------------------
+
+The two adjustments compose:
+   - Balanced softmax shifts the decision boundary toward rare classes.
+   - CB-focal up-weights rare-class examples in the loss.
+
+   L_stage2 = CB-focal( BalSM(z, n), y, n )
+
+That is:
+   1. Compute n_c per class on the training fold.
+   2. Apply balanced-softmax adjustment to z -> z_adj.
+   3. Apply CB-focal with class weights derived from n.
+
+LaTeX:
+   \mathcal{L}_{\text{Stage-2}}(z, y) =
+     - w_y \, (1 - \tilde{p}_y)^{\gamma} \, \log \tilde{p}_y,
+   \quad
+   \tilde{p}_y = \mathrm{softmax}(z + \tau \log \pi)_y
+
+with w_y from CB-focal (Section 2.1) and pi from balanced softmax
+(Section 2.2).
+
+Constants (same as 2.1, 2.2):
+   beta = 0.999, gamma = 2.0, tau = 1.0
+
+
+================================================================================
+CITATIONS FOR THE LOSS FORMULAS
+================================================================================
+
+  HoVer-Net (HV-map loss design, Sem3 head structure):
+    S. Graham et al., "Hover-Net: Simultaneous segmentation and
+    classification of nuclei in multi-tissue histology images,"
+    Med. Image Anal., vol. 58, Dec. 2019, Art. no. 101563.
+
+  Focal loss:
+    T.-Y. Lin et al., "Focal loss for dense object detection,"
+    in Proc. IEEE Int. Conf. Comput. Vis. (ICCV), Oct. 2017,
+    pp. 2999-3007.
+
+  Class-balanced focal loss:
+    Y. Cui, M. Jia, T.-Y. Lin, Y. Song, and S. Belongie,
+    "Class-balanced loss based on effective number of samples,"
+    in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR),
+    2019, pp. 9268-9277.
+
+  Balanced softmax:
+    J. Ren, C. Yu, S. Sheng, X. Ma, H. Zhao, S. Yi, and H. Li,
+    "Balanced meta-softmax for long-tailed visual recognition,"
+    in Proc. NeurIPS, 2020.
+
+  Hinge GAN loss:
+    J. H. Lim and J. C. Ye, "Geometric GAN,"
+    arXiv:1705.02894, 2017.
+
+  PatchGAN discriminator:
+    P. Isola, J.-Y. Zhu, T. Zhou, and A. A. Efros,
+    "Image-to-image translation with conditional adversarial networks,"
+    in Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR),
+    2017, pp. 1125-1134.
+
+
+================================================================================
+END OF LOSS SPEC
+================================================================================

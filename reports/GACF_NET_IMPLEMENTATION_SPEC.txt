@@ -1,0 +1,155 @@
+================================================================================
+GACF-NET — IMPLEMENTATION ENVIRONMENT + REPRODUCIBILITY SPECIFICATION
+For the paper's "Implementation Details" subsection.
+
+Verified against the actual machine used for this work.
+================================================================================
+
+CONTENTS
+--------
+  1.  Hardware
+  2.  Software stack
+  3.  Total compute used
+  4.  Random seeds
+  5.  Reproducibility checklist
+
+
+================================================================================
+1. HARDWARE
+================================================================================
+
+  Component          | Spec
+  -------------------|----------------------------------------
+  GPUs               | 4 x NVIDIA L40 (Ada Lovelace), 46 GB each (188 GB total)
+  CPUs               | 96 logical cores
+  System RAM         | 503 GB
+  OS                 | Ubuntu 22.04 LTS (Linux 5.15.x kernel)
+  Storage            | ~7 TB available on the working partition
+
+(Trainings reported here used between 1 and 4 GPUs simultaneously
+depending on the experiment; PanNuke AGAFNet replication ran 3 splits in
+parallel on GPUs 0-2, CoNSeP ran 5 folds parallel across all 4 GPUs with
+one GPU doubling up.)
+
+
+================================================================================
+2. SOFTWARE STACK
+================================================================================
+
+  Component                | Version (this run)
+  -------------------------|-----------------------------------
+  Python                   | 3.12
+  PyTorch                  | (Stage-1, Stage-2, UNI inference)
+  TensorFlow               | 2.20.0 (AGAFNet replication only)
+  CUDA                     | 12.x (GPU-aware via L40 drivers)
+  cuDNN                    | matches CUDA 12.x
+  timm                     | for UNI ViT-L hub loading (hf-hub:MahmoodLab/uni)
+  scikit-image             | watershed, region props, LBP, GLCM
+  scikit-learn             | StandardScaler, KFold, F1 reporting
+  OpenCV (cv2)             | image I/O, Reinhard, Sobel, morphology
+  scipy                    | gaussian_filter, label, binary_fill_holes,
+                           | ndimage operations
+  XGBoost                  | tree_method='hist', GPU (device='cuda:0')
+  h5py                     | feature caching
+  numpy                    | (everything)
+
+Virtual environment:
+  /home/sbarua/.venv  (Python 3.12, all packages above installed via pip)
+
+
+================================================================================
+3. TOTAL COMPUTE USED
+================================================================================
+
+For the AGAFNet replication + head-to-head experiment specifically (the
+focus of this work). GACF-Net Stage 1 + Stage 2 training times are
+documented in GACF_NET_HYPERPARAMETERS_SPEC Section 4 and Section 2.2.
+
+  Phase                           | Wall-clock time on this machine
+  --------------------------------|----------------------------------
+  AGAFNet replication training:
+    Lizard  (pre-existing)        | ~7.5 hr  (5 folds, sequential)
+    CoNSeP  (this work)           | ~3 hr    (5 folds, 4-GPU parallel)
+    PanNuke (this work)           | ~6 hr    (3 splits, 3-GPU parallel)
+  AGAFNet inference + post-proc  |
+    Lizard / CoNSeP / PanNuke     | ~2-3 min per fold (sequential)
+  Step 0 post-processing          | ~1-3 min per dataset (all images
+                                  | watershed-segmented at once)
+  Step 1 match + label table      | ~1-3 min per dataset
+  Step 2 handcrafted (32 workers) | ~2-5 min per dataset
+  Step 3 UNI extraction (1 GPU)   | ~1-4 min per dataset
+  Step 4 per-fold scaling         | seconds
+  Step 5 GACF-Net Stage-2 train   | ~10-60 sec per fold
+  Step 6 XGBoost head-to-head     | ~5-10 min per dataset
+
+Total head-to-head experiment across all 3 datasets (excluding the
+pre-existing Lizard AGAFNet replication): ~12 hr.
+
+
+================================================================================
+4. RANDOM SEEDS
+================================================================================
+
+All deterministic seeds set explicitly so the experiment can be re-run
+to bit-identical numbers on the same hardware/software stack.
+
+  Component                       | Seed
+  --------------------------------|-------------------------------
+  AGAFNet replication training    | 42 (numpy + tensorflow)
+  AGAFNet PanNuke val carve       | 42 + split_id (= 43, 44, 45)
+  Stage-2 GACF-Net training       | 42 (torch + numpy)
+  XGBoost                         | 0
+  sklearn KFold (CoNSeP)          | 42 (shuffle=True, random_state=42)
+
+
+================================================================================
+5. REPRODUCIBILITY CHECKLIST
+================================================================================
+
+What's needed to re-run the experiments from scratch on the same machine:
+
+  [x] AGAFNet replication training scripts:
+        /home/sbarua/CoNSeP/fusion_final_document/run_agafnet_consep.py
+        /home/sbarua/Panuke/fusion_final_document/scripts/agafnet_replication_training.py
+        (Lizard: pre-existing, predictions reused from
+         /home/sbarua/Lizard/agafnet_replication/)
+
+  [x] Per-fold / per-split parallel variants of the above (this work):
+        /home/sbarua/fanseg/agafnet_mask_fusion_consep/code/run_agafnet_consep_perfold.py
+        /home/sbarua/fanseg/agafnet_mask_fusion_pannuke/code/run_agafnet_pannuke_persplit.py
+
+  [x] Head-to-head pipeline (step0..6), per dataset:
+        /home/sbarua/fanseg/agafnet_mask_fusion/code/                (Lizard)
+        /home/sbarua/fanseg/agafnet_mask_fusion_consep/code/         (CoNSeP)
+        /home/sbarua/fanseg/agafnet_mask_fusion_pannuke/code/        (PanNuke)
+        (Also mirrored in GitHub repo:
+         /home/sbarua/fanseg/GACF_NET_repo/agafnet_replication_fusion/lizard/code/)
+
+  [x] GACF-Net Stage-2 fusion model:
+        gacfnet.py (copied into each agafnet_mask_fusion*/code/ folder)
+
+  [x] UNI ViT-L encoder loader:
+        /home/sbarua/fanseg/code/encoder.py
+        (loads via timm.create_model("hf-hub:MahmoodLab/uni", pretrained=True))
+
+  [x] Handcrafted feature extractor (71-d):
+        /home/sbarua/CoNSeP/fusion_classification_new/step1_extract_handcrafted.py
+        (imported by all three step2_extract_handcrafted_parallel.py)
+
+  [ ] AGAFNet checkpoints + cached predictions (large files, on this
+      machine only; not in any git repo):
+        /home/sbarua/Lizard/agafnet_replication/...
+        /home/sbarua/CoNSeP/agafnet_replication/...
+        /home/sbarua/Panuke/AGAFNet_v1/...
+
+  [ ] Feature caches (large H5 / NPZ files, on this machine only):
+        /home/sbarua/fanseg/agafnet_mask_fusion*/features/
+
+The CODE is reproducible; the cached predictions and feature files are
+not committed (sizes range from 100 MB to 6 GB per file) and would need
+to be regenerated from the raw datasets on a fresh machine.
+
+
+================================================================================
+END OF IMPLEMENTATION SPEC
+================================================================================

@@ -1,0 +1,307 @@
+================================================================================
+GACF-NET — HYPERPARAMETERS SPECIFICATION FOR PAPER WRITING
+Consolidated tables of every hyperparameter used in this work, ready to
+drop into a paper's "Implementation Details" subsection.
+
+All values verified against the actual training/inference scripts on disk.
+================================================================================
+
+CONTENTS
+--------
+  1.  Stage 1 — Segmentation (GACF-Net)
+        1.1  Phase 1 — task-only training
+        1.2  Phase 2 — task + PatchGAN adversarial regularization
+        1.3  Inference (TTA + watershed)
+  2.  Stage 2 — GACF-Net fusion
+        2.1  Architecture hyperparameters
+        2.2  Training hyperparameters
+        2.3  Loss hyperparameters (CB-focal + balanced softmax)
+  3.  XGBoost handoff
+  4.  AGAFNet replication training (per dataset)
+        4.1  Lizard
+        4.2  CoNSeP
+        4.3  PanNuke
+  5.  Post-processing (watershed + size filter)
+
+
+================================================================================
+1. STAGE 1 — SEGMENTATION (GACF-Net)
+================================================================================
+
+------------------------------------------------------------
+1.1  Phase 1 — task-only training
+------------------------------------------------------------
+
+  Hyperparameter            | Value                  | Notes
+  --------------------------|------------------------|----------------------------
+  Encoder                   | UNI ViT-L (frozen)     | timm hf-hub:MahmoodLab/uni
+  Decoder                   | DPT (4-stage)          | features from blocks 5,11,17,23
+  Optimizer                 | AdamW                  |
+  Learning rate (init)      | 2e-4                   |
+  LR schedule               | Cosine annealing       | warmup -> base -> min
+  Min LR                    | 1e-6                   |
+  Warmup epochs             | 10                     |
+  Weight decay              | 1e-4                   |
+  Batch size                | 8 patches              | per GPU
+  Epochs                    | 100                    |
+  Gradient clip             | max_norm = 1.0         |
+  Loss weights              | lambda_hv = 1.0        |
+                            | lambda_sem3 = 1.0      |
+                            | lambda_bdry = 0.5      |
+  Sem3 class weights        | [1.0, 1.0, 3.0]        | bg, interior, boundary
+  Mixed precision           | autocast (float16)     |
+  Augmentations             | flip, rot90, color     | see DATASETS_SPEC 5.2
+
+------------------------------------------------------------
+1.2  Phase 2 — task + PatchGAN adversarial regularization
+------------------------------------------------------------
+
+  Hyperparameter            | Value                  | Notes
+  --------------------------|------------------------|----------------------------
+  Initialize from           | Phase 1 best.pt        | warm-start
+  Optimizer (generator)     | AdamW                  |
+  Optimizer (discriminator) | AdamW                  |
+  Generator LR              | 1e-4                   | halved from Phase 1
+  Discriminator LR          | 1e-4                   |
+  LR schedule               | Cosine to 1e-6         |
+  Epochs                    | 50                     |
+  Batch size                | 8 patches              |
+  Discriminator             | 4-layer PatchGAN       | stride-2 each, InstanceNorm
+                            |                        | LeakyReLU(0.2)
+  Discriminator input       | 5 ch (2 HV + 3 Sem3)   | continuous output maps
+  GAN loss type             | Hinge                  | Lim & Ye 2017
+  Adversarial weight        | lambda_gan = 0.1       |
+  D update frequency        | 1 per G step           |
+  Total loss (Phase 2)      | L_phase1 + 0.1 * L_GAN | task losses unchanged
+
+------------------------------------------------------------
+1.3  Inference (TTA + watershed)
+------------------------------------------------------------
+
+  Step                      | Value
+  --------------------------|---------------------------------------------
+  TTA group                 | D4 (8 orientations: identity, 3 rotations,
+                            |     flip_h, flip_h+rot90/180/270)
+  TTA aggregation           | mean of 8 inverse-transformed prediction maps
+  Foreground threshold      | 0.5 on Sem3 nucleus-interior channel
+  Watershed markers         | local maxima of HV magnitude
+  Min nucleus size          | 30 pixels
+  Per-dataset Sem3 fg thr.  | tuned via sweep_thresholds_*.py
+                            | (final values stored alongside checkpoints)
+
+
+================================================================================
+2. STAGE 2 — GACF-NET FUSION
+================================================================================
+
+------------------------------------------------------------
+2.1  Architecture hyperparameters
+------------------------------------------------------------
+
+  Component                 | Hyperparameter         | Value
+  --------------------------|------------------------|----------------
+  Shared projections        | d_proj                 | 192
+                            | activation             | tanh
+                            | dropout                | 0.3
+  GMU gating                | gate input             | concat(h, t, c)
+                            | gate activation        | softmax
+  Cell-graph transformer    | d_model                | 192
+                            | n_heads                | 4
+                            | head dim               | 48
+                            | n_layers               | 1
+                            | k_graph (kNN)          | 64
+                            | FFN expansion          | 2x
+                            | FFN activation         | GELU
+                            | dropout                | 0.3
+                            | attention              | scatter_softmax (sparse)
+  MFB cross-block           | k_mfb                  | 3
+                            | pairs                  | (h,t), (h,c), (t,c)
+                            | output per pair        | 64 (192 // 3)
+                            | total cross_emb        | 192 (= 3 * 64)
+                            | dropout                | 0.4
+                            | normalize              | signed sqrt + L2
+  Classifier head           | hidden                 | 128
+                            | activation             | GELU
+                            | dropout                | 0.3
+  TOTAL PARAMS              | --                     | 757K (under 800K budget)
+
+------------------------------------------------------------
+2.2  Training hyperparameters
+------------------------------------------------------------
+
+  Hyperparameter            | Value
+  --------------------------|----------------------------------------------
+  Optimizer                 | AdamW
+  Learning rate             | 1e-3
+  LR schedule               | Cosine annealing to 1e-5 over `epochs`
+  Weight decay              | 1e-4
+  Batch size                | 8 patches (= 8 graphs per batch)
+                            | (CoNSeP uses bs=2 due to ~hundreds of nuclei
+                            |  per 1000x1000 image; PanNuke/Lizard bs=8)
+  Epochs                    | 40
+  Gradient clip             | max_norm = 1.0
+  Random seed               | 42
+  Modality dropout          | p = 0.15 (zero one of hand/tight/ctx per step)
+  Train-row filter          | (fold_id != test_fold) AND (gt_class > 0)
+  Validation split          | none (use Stage-1 segmentation val instead;
+                            |       Stage-2 is purely supervised over labeled
+                            |       AGAFNet-detected nuclei)
+
+------------------------------------------------------------
+2.3  Loss hyperparameters (CB-focal + balanced softmax)
+------------------------------------------------------------
+
+CB-focal (Cui et al. 2019):
+  beta  = 0.999          # effective-number-of-samples decay
+  gamma = 2.0            # focal modulation power
+  per-class weights normalized to sum = C (num_classes)
+
+Balanced softmax (Ren et al. 2020):
+  tau   = 1.0            # logit-adjustment strength
+  adjusted_logits = logits + log(class_prior)
+  class_prior = empirical per-class frequency on the training fold
+
+Total Stage-2 loss:
+  L = CB_focal( bal_softmax(logits, class_freq), targets, class_freq )
+
+
+================================================================================
+3. XGBOOST HANDOFF
+================================================================================
+
+The HEADLINE configuration (used for the +graph+cross comparison column in
+the paper):
+
+  Hyperparameter            | Value          | Notes
+  --------------------------|----------------|------------------------------
+  n_estimators              | 400            |
+  max_depth                 | 6              |
+  learning_rate             | 0.1            |
+  subsample                 | 0.85           |
+  min_child_weight          | 5              |
+  colsample_bytree          | 0.7            | tree-level subsample (kept on)
+  colsample_bylevel         | 1.0            | OFF — protects multiplicative
+                            |                | signal (level-subsample would
+                            |                | split a (.) b across sub-samples)
+  colsample_bynode          | 1.0            | OFF — same reason as above
+  reg_lambda                | 1.5            | heavier L2 for heavy-tailed
+                            |                | bilinear cross-terms
+  objective                 | multi:softprob |
+  num_class                 | dataset-dependent (Lizard 6, CoNSeP 4, PanNuke 5)
+  tree_method               | 'hist'         |
+  device                    | 'cuda:0'       |
+  n_jobs                    | 8              |
+  random_state              | 0              |
+  sample_weight             | class-balanced | counts.sum() / (C * counts)
+  Input dim                 | hand(71) || tight(1024) || ctx(1024)
+                            |    || graph_emb(192) || cross_emb(192) = 2503-d
+
+
+================================================================================
+4. AGAFNET REPLICATION TRAINING (per dataset)
+================================================================================
+
+All AGAFNet hyperparameters below follow the original paper (Naing et al.,
+IEEE TIP 2026) faithfully. We re-implemented the training pipeline; we did
+NOT load any official AGAFNet weights (none are publicly released).
+
+Shared across all 3 datasets:
+  Encoder                   : EfficientNet-B0
+  Decoders                  : type (multi-class) + boundary (binary)
+  Attention blocks          : CSAIB, AGCB, FARB (per AGAFNet paper)
+  HV-map head               : added on top of AGAFNet (HoVer-Net protocol;
+                              used for the watershed post-processing — not
+                              in the original AGAFNet paper but added in
+                              our replication for instance separation)
+  Optimizer                 : Adam (PanNuke) / Adam (CoNSeP)
+                              AdamW used by training script wrapper
+  LR schedule               : WarmupCosineDecay -> min_lr = 1e-6
+  Warmup epochs             : 10
+  Patience (early stop)     : 30
+  Batch size                : 4 patches
+  Epochs                    : 120 (early-stopped by val seg_acc)
+  Gradient clip             : max_norm = 1.0
+  Weight decay              : 1e-4
+  Label smoothing           : 0.1
+  Boundary dilation kernel  : 3
+  Min nucleus size (post)   : 30 pixels
+
+------------------------------------------------------------
+4.1  Lizard
+------------------------------------------------------------
+
+  Hyperparameter            | Value
+  --------------------------|--------
+  Learning rate (init)      | 1e-4
+  Num folds                 | 5
+  Num type classes          | 7 (= 6 nuclei + bg)
+  Tissue head               | NO (single tissue, colon only)
+  Input size                | 256x256
+  Per-fold training time    | ~1.5 hr per fold (pre-existing replication)
+
+------------------------------------------------------------
+4.2  CoNSeP
+------------------------------------------------------------
+
+  Hyperparameter            | Value
+  --------------------------|--------
+  Learning rate (init)      | 1e-4         (per AGAFNet paper Section IV-B)
+  Num folds                 | 5            (KFold on 41 images, random_state=42)
+  Num type classes          | 5 (= 4 nuclei + bg, after 7->4 remap)
+  Tissue head               | NO
+  Input size                | 256x256
+  Patch stride              | 164 (= 6x6 patches per 1000x1000 image)
+  Inference stride          | 128 (more overlap for tile averaging)
+  Inference batch           | 16
+  Per-fold training time    | ~3 hr per fold sequentially, parallelized on
+                            | 4x L40 (folds 1-4 in parallel + fold 5 sharing
+                            | GPU 0 with fold 1) -> ~3 hr wall-clock total
+
+------------------------------------------------------------
+4.3  PanNuke
+------------------------------------------------------------
+
+  Hyperparameter            | Value
+  --------------------------|--------
+  Learning rate (init)      | 2e-4         (per AGAFNet paper Section IV-B)
+  Num folds                 | 3            (standard PanNuke 3-fold CV)
+  Num type classes          | 6 (= 5 nuclei + bg)
+  Num tissue classes        | 19           (tissue head ENABLED on PanNuke)
+  Input size                | 256x256
+  Inference batch           | 16
+  Train/val carve           | 90/10 of combined two train folds,
+                            | seed = 42 + split_id
+  Per-split training time   | ~6 hr (one split full 120 ep, two early stopped
+                            | at ep 65, 70); 3 splits on 3 GPUs parallel ->
+                            | ~6 hr wall-clock total
+
+
+================================================================================
+5. POST-PROCESSING (watershed + size filter)
+================================================================================
+
+Same constants for both GACF-Net Stage-1 and the AGAFNet replication
+(both follow the HoVer-Net post-processing protocol):
+
+  Constant                  | Value     | Used in
+  --------------------------|-----------|---------------------------------
+  fg_threshold              | 0.5       | foreground mask from type_pred[0]
+  min_nucleus_size          | 30        | size filter (pixels)
+  max_nucleus_size          | 10000     | size filter (pixels)
+  sobel_ksize               | 21        | HV gradient kernel size
+  energy_threshold          | 0.4       | watershed marker thresholding
+  morph opening kernel      | ellipse (5x5)  | marker cleanup
+  marker min size           | 10        | remove tiny marker components
+
+Per-dataset Sem3 foreground threshold (GACF-Net Stage 1 only):
+  Lizard  : tuned via sweep_thresholds_lizard.py
+  CoNSeP  : tuned via sweep_thresholds_consep.py
+  PanNuke : tuned via sweep_thresholds_pannuke.py
+
+(Tuned threshold values are stored in the checkpoint metadata; see
+GACF_NET_FINAL_RESULTS.txt for the per-dataset chosen values.)
+
+
+================================================================================
+END OF HYPERPARAMETERS SPEC
+================================================================================

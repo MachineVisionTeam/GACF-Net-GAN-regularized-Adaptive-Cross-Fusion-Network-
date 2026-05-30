@@ -1,0 +1,209 @@
+================================================================================
+GACF-NET — BASELINES SPECIFICATION FOR PAPER WRITING
+The methods we compare against, organized by why they're cited.
+
+Primary baseline: AGAFNet (Naing et al., IEEE TIP 2026).
+Secondary baselines: drawn from AGAFNet Table III; reuse their citation
+numbering so the same reference IDs can be reused in the GACF-Net paper.
+================================================================================
+
+CONTENTS
+--------
+  1.  Primary baseline — AGAFNet
+        1.1  Citation
+        1.2  Why it is the right baseline for this work
+        1.3  Two comparisons we run against it
+  2.  Secondary baselines (drawn from AGAFNet Table III)
+  3.  Reinhard color normalization (cited but not a baseline)
+  4.  How to phrase the comparison in the paper
+
+
+================================================================================
+1. PRIMARY BASELINE — AGAFNet
+================================================================================
+
+------------------------------------------------------------
+1.1  Citation
+------------------------------------------------------------
+
+  [Naing2026]
+      N. N. Naing, H. Chen, Q. Cai, L. Xia, Z. Gao, and J. An,
+      "AGAFNet: Adaptive Gated Attention Fusion Network for Accurate
+       Nuclei Segmentation and Classification in Histology Images,"
+      IEEE Trans. Image Process., vol. 35, pp. 98-111, 2026.
+      doi: 10.1109/TIP.2025.3646471
+
+The paper PDF is at:
+  /home/sbarua/paper/AGAFNet_Adaptive_Gated_Attention_Fusion_Network_for_Accurate_Nuclei_Segmentation_and_Classification_in_Histology_Images.pdf
+
+------------------------------------------------------------
+1.2  Why it is the right baseline for this work
+------------------------------------------------------------
+
+  - AGAFNet (2026) is the most recent state-of-the-art on the exact same
+    three datasets we evaluate on (Lizard, CoNSeP, PanNuke).
+  - Joint segmentation + per-nucleus classification — same task formulation.
+  - Uses the same evaluation protocol we adopt (Convention C per-class F1
+    under IoU >= 0.5 instance matching).
+  - Authors do NOT release official code or trained weights; we therefore
+    re-implement the architecture exactly per the paper's recipe (see
+    GACF_NET_ARCHITECTURE_SPEC Section 8.1) and report a documented
+    replication gap.
+
+------------------------------------------------------------
+1.3  Two comparisons we run against AGAFNet
+------------------------------------------------------------
+
+(a) END-TO-END comparison
+    AGAFNet's full pipeline (segmentation + classification) vs GACF-Net's
+    full pipeline (Stage 1 segmentation + Stage 2 fusion + XGBoost).
+    Reported as standard per-dataset segmentation metrics (ACC, Dice, SE,
+    AJI, PQ) plus Convention C per-class F1.
+    -> Shows whether the WHOLE GACF-Net pipeline beats AGAFNet end-to-end.
+
+(b) CONTROLLED HEAD-TO-HEAD (the +graph+cross column)
+    Hold AGAFNet's segmentation FIXED at its predicted instance masks and
+    swap ONLY the classifier head:
+      - AGAFNet-MV   : AGAFNet's own pixel-majority-vote per nucleus
+      - GACF-Net S2  : XGBoost on Stage-2 fusion embeddings (+graph+cross
+                       mode) over the SAME AGAFNet masks
+    Evaluated under Convention C with IDENTICAL FN_d for both methods
+    (since the segmentation is fixed). Isolates classifier quality from
+    segmentation quality.
+    -> Shows whether OUR Stage-2 classifier beats AGAFNet's pixel-MV
+       classifier on the same nuclei.
+
+(See GACF_NET_ARCHITECTURE_SPEC Section 8 for the full experimental
+design; numerical results are in GACF_NET_FINAL_RESULTS.txt.)
+
+
+================================================================================
+2. SECONDARY BASELINES (drawn from AGAFNet Table III)
+================================================================================
+
+The AGAFNet paper compares against 12 prior methods on CoNSeP, Lizard, and
+PanNuke. Because their citation list is recent and complete, we reuse the
+same set in OUR paper's results tables. The reference numbers below match
+AGAFNet's bibliography ([ref-num-in-AGAFNet]).
+
+  Method            | AGAFNet ref | Citation (paste-ready)
+  ------------------|-------------|---------------------------------------------
+  Dist              | [37]        | N. A. Koohbanani, M. Jahanifar, A. Gooya,
+                    |             | and N. Rajpoot, "Nuclear instance segmenta-
+                    |             | tion using a proposal-free spatially aware
+                    |             | deep learning framework," in Proc. MICCAI,
+                    |             | 2019, pp. 622-630.
+  U-Net             | [52]        | O. Ronneberger, P. Fischer, and T. Brox,
+                    |             | "U-Net: Convolutional networks for bio-
+                    |             | medical image segmentation," in Proc.
+                    |             | MICCAI, 2015, pp. 234-241.
+  MicroNet          | [32]        | S. E. A. Raza et al., "Micro-Net: A unified
+                    |             | model for segmentation of various objects in
+                    |             | microscopy images," Med. Image Anal., vol.
+                    |             | 52, pp. 160-173, Feb. 2019.
+  HoverNet          | [17]        | S. Graham et al., "Hover-Net: Simultaneous
+                    |             | segmentation and classification of nuclei
+                    |             | in multi-tissue histology images," Med.
+                    |             | Image Anal., vol. 58, 2019, Art. no. 101563.
+  SwinUNet          | [53]        | H. Cao et al., "Swin-UNet: UNet-like pure
+                    |             | transformer for medical image segmentation,"
+                    |             | in Proc. ECCV, 2021, pp. 205-218.
+  TransUNet         | [54]        | J. Chen et al., "TransUNet: Transformers
+                    |             | make strong encoders for medical image
+                    |             | segmentation," arXiv:2102.04306, 2021.
+  MaskRCNN          | [55]        | A. O. Vuola, S. U. Akram, and J. Kannala,
+                    |             | "Mask-RCNN and U-Net ensembled for nuclei
+                    |             | segmentation," in Proc. IEEE ISBI, 2019,
+                    |             | pp. 208-212.
+  TSFDNet           | [18]        | T. N. N. Doan, B. Song, T. T. L. Vuong,
+                    |             | K. Kim, and J. T. Kwak, "SONNET: A self-
+                    |             | guided ordinal regression neural network
+                    |             | for segmentation and classification of
+                    |             | nuclei in large-scale multi-tissue histo-
+                    |             | logy images," IEEE J. Biomed. Health
+                    |             | Informat., vol. 26, no. 7, pp. 3218-3228,
+                    |             | Jul. 2022.
+  SREDNet           | [19]        | H. Xiao, A. Qu, H. Zhong, and P. He,
+                    |             | "A scale and region-enhanced decoding
+                    |             | network for nuclei classification in
+                    |             | histology image," Biomed. Signal Process.
+                    |             | Control, vol. 83, May 2023, Art. no. 104626.
+  DRCANet           | [20]        | G. M. Dogar, M. Shahzad, and M. M. Fraz,
+                    |             | "Attention augmented distance regression
+                    |             | and classification network for nuclei
+                    |             | instance segmentation and type classifica-
+                    |             | tion in histology images," Biomed. Signal
+                    |             | Process. Control, vol. 79, Jan. 2023,
+                    |             | Art. no. 104199.
+  CellViT           | [57]        | F. Horst et al., "CellViT: Vision trans-
+                    |             | formers for precise cell segmentation and
+                    |             | classification," Med. Image Anal., vol. 94,
+                    |             | May 2024, Art. no. 103143.
+  HoverNeXt         | [56]        | E. Baumann, B. Dislich, J. L. Rumberger,
+                    |             | I. D. Nagtegaal, M. R. Martinez, and
+                    |             | I. Zlobec, "HoVer-next: A fast nuclei
+                    |             | segmentation and classification pipeline
+                    |             | for next generation histopathology," in
+                    |             | Proc. Med. Imag. with Deep Learn., 2024,
+                    |             | pp. 61-86.
+
+Which of these we ACTUALLY include in the GACF-Net paper:
+  - Always cite AGAFNet [Naing2026] (primary baseline).
+  - Always cite HoVer-Net [Graham2019] (we use its HV-map head + watershed
+    protocol; also the CoNSeP source).
+  - Always cite UNI [Chen2024] (foundation model encoder).
+  - Always cite DPT [Ranftl2021] (decoder).
+  - For the comparison table, copy AGAFNet's Table III numbers directly
+    rather than re-running the 12 baselines; cite them as "results from
+    AGAFNet Table III, with permission" or as the original papers.
+  - The KEY new baseline we add ourselves is HoVer-Net (Graham2019)
+    and AGAFNet (Naing2026). Optionally HoVer-NeXt [Baumann2024] since
+    it's the most recent fast competitor.
+
+
+================================================================================
+3. REINHARD COLOR NORMALIZATION (cited but not a baseline)
+================================================================================
+
+Used by both AGAFNet (their ref [51]) and our work. Cite once in
+Implementation Details:
+
+  [Reinhard2001]
+      E. Reinhard, M. Adhikhmin, B. Gooch, and P. Shirley,
+      "Color transfer between images,"
+      IEEE Comput. Graph. Appl., vol. 21, no. 4, pp. 34-41, Aug. 2001.
+
+
+================================================================================
+4. HOW TO PHRASE THE COMPARISON IN THE PAPER
+================================================================================
+
+Suggested two-paragraph framing for the Results section (Framing A —
+pipeline-first, as decided in the architecture-spec contributions section):
+
+Paragraph 1 — end-to-end:
+  "We compare GACF-Net end-to-end against AGAFNet [Naing2026] on three
+   public H&E datasets (Lizard, CoNSeP, PanNuke). For AGAFNet, we re-
+   implement the architecture per the paper's recipe and report a
+   documented replication gap; we adopt the same five-fold CV protocol
+   for Lizard / CoNSeP and the standard three-fold CV for PanNuke.
+   Table X reports the per-dataset segmentation and classification
+   results."
+
+Paragraph 2 — controlled head-to-head (Section 8.2 protocol):
+  "To isolate the classifier contribution from the segmentation
+   contribution, we run a controlled head-to-head experiment in which we
+   fix the predicted instance masks to AGAFNet's output and swap only the
+   per-nucleus classifier. We compare AGAFNet's native pixel-majority-vote
+   classifier against our Stage-2 fusion + XGBoost head, both evaluated
+   under Convention C with identical FN_d. Table Y reports the resulting
+   per-class F1 — our classifier matches AGAFNet on Lizard (strong
+   segmentation) and improves significantly on CoNSeP and PanNuke (weaker
+   segmentation)."
+
+(Numerical values for Table X and Table Y live in GACF_NET_FINAL_RESULTS.txt.)
+
+
+================================================================================
+END OF BASELINES SPEC
+================================================================================

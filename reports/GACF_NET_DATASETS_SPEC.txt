@@ -1,0 +1,407 @@
+================================================================================
+GACF-NET — DATASETS SPECIFICATION FOR PAPER WRITING
+Three multi-tissue H&E datasets used in this work, with citations matching
+the AGAFNet (Naing et al., IEEE TIP 2026) reference numbering so the same
+sources can be reused in the GACF-Net paper.
+================================================================================
+
+CONTENTS
+--------
+  1.  Summary table (one row per dataset)
+  2.  PanNuke
+        2.1  Source + citation
+        2.2  Statistics
+        2.3  Classes (nuclei + tissue)
+        2.4  Fold protocol
+        2.5  Pre-processing applied in this work
+  3.  CoNSeP
+        3.1  Source + citation
+        3.2  Statistics
+        3.3  Classes (with our 7->4 remapping)
+        3.4  Fold protocol
+        3.5  Pre-processing applied in this work
+  4.  Lizard
+        4.1  Source + citation
+        4.2  Statistics
+        4.3  Classes
+        4.4  Fold protocol
+        4.5  Pre-processing applied in this work
+  5.  Common pre-processing notes
+        5.1  Reinhard color normalization
+        5.2  Augmentation policy (training only)
+        5.3  Storage layout on disk
+
+
+================================================================================
+1. SUMMARY TABLE
+================================================================================
+
+(matches AGAFNet paper Table I; numbers verified against the actual files
+we use in /mnt/storage*/)
+
+  Dataset  | Images    | Nuclei (annotated) | Patch size | Classes | Mag. | Folds | CV
+  ---------|-----------|--------------------|------------|---------|------|-------|----
+  PanNuke  | 7,904     | 189,744            | 256x256    |   5     |  40x |   3   | 3-fold
+  CoNSeP   | 41        |  24,319            | 1000x1000  |   4 *   |  40x |   5   | 5-fold
+  Lizard   | 4,981     | ~half a million    | 256x256    |   6     |  20x |   5   | 5-fold
+
+  * CoNSeP originally has 7 classes; standard convention (HoVer-Net paper)
+    remaps to 4: see Section 3.3.
+
+
+================================================================================
+2. PANNUKE
+================================================================================
+
+------------------------------------------------------------
+2.1  Source + citation
+------------------------------------------------------------
+
+The PanNuke dataset is a pan-cancer H&E histology dataset with semi-automated
+nuclei annotations across 19 tissue types. We use the same dataset and the
+same two-paper citation pair that AGAFNet uses (Naing et al. 2026 refs [48]
+and [49]):
+
+  [Gamper2019]
+      J. Gamper, N. A. Koohbanani, A. Benet, A. Khuram, and N. Rajpoot,
+      "PanNuke: An open pan-cancer histology dataset for nuclei instance
+       segmentation and classification,"
+      in Proc. 15th Eur. Congr. Digit. Pathol., Apr. 2019, pp. 11-19.
+
+  [Gamper2020]
+      J. Gamper et al.,
+      "PanNuke dataset extension, insights and baselines,"
+      arXiv:2003.10778, 2020.
+
+Cite both. The first introduces the dataset; the second adds the 7,904-image
+extension and the per-fold splits used universally.
+
+------------------------------------------------------------
+2.2  Statistics
+------------------------------------------------------------
+
+  - 7,904 H&E image patches (verified: fold1 has 2,656; fold2 2,523; fold3 2,722)
+  - 189,744 total annotated nuclei
+  - All patches 256x256 pixels
+  - 40x objective magnification
+  - Patches extracted from whole-slide images across 19 tissue types
+  - On-disk layout (this system):
+        /mnt/storage2/PanNuke/fold{1,2,3}/{images.npy, masks.npy, types.npy}
+        images.npy : (N, 256, 256, 3) float64, RGB in [0, 255]
+        masks.npy  : (N, 256, 256, 6) float64 — channels 0..4 are the 5
+                      nuclei-class instance maps, channel 5 is background
+        types.npy  : (N,) <U13 — tissue-type name per patch
+
+------------------------------------------------------------
+2.3  Classes
+------------------------------------------------------------
+
+Nuclei classes (5 — channel index in masks.npy):
+  ch | class id | name
+  ---|----------|----------------
+   0 |    1     | Neoplastic
+   1 |    2     | Inflammatory
+   2 |    3     | Connective
+   3 |    4     | Dead              <-- 0.4% of all nuclei (severe imbalance)
+   4 |    5     | Epithelial
+   5 |   (bg)   | background
+
+Per-class nuclei counts (paper-reported, AGAFNet Table 2 detection-counts
+section):
+  Neoplastic   77,403
+  Inflammatory 32,276
+  Connective   50,585
+  Dead          2,908
+  Epithelial   26,572
+  TOTAL       189,744
+
+Tissue types (19 — used by AGAFNet's tissue-classification head; not used by
+GACF-Net Stage 1 since our segmentation architecture has no tissue head):
+  Adrenal_gland, Bile-duct, Bladder, Breast, Cervix, Colon, Esophagus,
+  HeadNeck, Kidney, Liver, Lung, Ovarian, Pancreatic, Prostate, Skin,
+  Stomach, Testis, Thyroid, Uterus.
+
+------------------------------------------------------------
+2.4  Fold protocol
+------------------------------------------------------------
+
+Standard PanNuke 3-fold cross-validation (each fold serves as test exactly
+once) — matches HoVer-Net / PanNuke paper convention:
+
+  Split 1: train = fold1 + fold2,  test = fold3
+  Split 2: train = fold1 + fold3,  test = fold2
+  Split 3: train = fold2 + fold3,  test = fold1
+
+This work: within each split, the combined two training folds are randomly
+shuffled (seed = 42 + split_id) and a 10% holdout is carved as validation
+for monitoring / early stopping. The remaining 90% is the actual training
+set for that split.
+
+------------------------------------------------------------
+2.5  Pre-processing applied in this work
+------------------------------------------------------------
+
+  - Mask parsing: 6-channel mask -> single (inst_map, type_map) per patch
+    (HoVer-Net protocol; same logic as AGAFNet replication training script).
+  - Reinhard color normalization with TARGET = LAB stats of
+    /mnt/storage2/PanNuke/fold1/images.npy[738] (matches AGAFNet replication
+    training script's ref-image choice exactly).
+  - Augmentations (training only): random rotation (0/90/180/270),
+    horizontal/vertical flip, elastic deformation, color jitter.
+  - Tissue labels are loaded but UNUSED by GACF-Net Stage 1 (no tissue head).
+
+
+================================================================================
+3. CoNSeP
+================================================================================
+
+------------------------------------------------------------
+3.1  Source + citation
+------------------------------------------------------------
+
+The CoNSeP (Colorectal Nuclear Segmentation and Phenotypes) dataset is the
+companion dataset to the HoVer-Net paper. AGAFNet cites it as ref [17]:
+
+  [Graham2019]
+      S. Graham, Q. D. Vu, S. E. A. Raza, A. Azam, Y. W. Tsang, J. T. Kwak,
+      and N. M. Rajpoot,
+      "Hover-Net: Simultaneous segmentation and classification of nuclei
+       in multi-tissue histology images,"
+      Med. Image Anal., vol. 58, Dec. 2019, Art. no. 101563.
+
+Cite this once for BOTH the CoNSeP dataset and the HoVer-Net architecture
+(our Stage-1 HV map head + watershed post-processing follow this paper).
+
+------------------------------------------------------------
+3.2  Statistics
+------------------------------------------------------------
+
+  - 41 H&E-stained images (27 Train + 14 Test in the original release)
+  - 24,319 annotated nuclei
+  - Each image 1000x1000 pixels
+  - 40x objective magnification
+  - Derived from 16 colorectal adenocarcinoma whole-slide images
+  - On-disk layout (this system):
+        /home/sbarua/CoNSeP/{Train,Test}/Images/*.png       (PNG, RGB or RGBA*)
+        /home/sbarua/CoNSeP/{Train,Test}/Labels/*.mat       (scipy .mat with
+                                                              inst_map + type_map)
+
+  (*) 9 of the 41 PNGs ship as RGBA (Train/train_21..27, Test/test_12..13);
+      this is silently handled by `cv2.cvtColor` which drops the alpha
+      channel for RGB2LAB. Step3 UNI extraction explicitly does
+      `Image.open(...).convert('RGB')`.
+
+------------------------------------------------------------
+3.3  Classes (7 -> 4 remap)
+------------------------------------------------------------
+
+CoNSeP ships with 7 original class labels; the standard convention
+(introduced by the HoVer-Net paper [Graham2019] and used by AGAFNet) is to
+merge them into 4 effective classes for evaluation. This work uses the same
+remap as the AGAFNet replication script:
+
+  Original (1..7)                                  Remapped (1..4)
+  ----------------------------------------       -------------------
+  1  Other                                  -->  1  Miscellaneous
+  2  Inflammatory                           -->  2  Inflammatory
+  3  Epithelial (Healthy)                   -->  3  Epithelial
+  4  Epithelial (Dysplastic/Malignant)      -->  3  Epithelial
+  5  Spindle-Shaped                         -->  4  Spindle-Shaped
+  6  Dead                                   -->  1  Miscellaneous
+  7  Non-Neoplastic Epithelial              -->  3  Epithelial
+
+Final per-nucleus class IDs (1..4): Misc, Inflammatory, Epithelial, Spindle.
+
+------------------------------------------------------------
+3.4  Fold protocol
+------------------------------------------------------------
+
+5-fold cross-validation built on all 41 images (combined Train+Test), using
+sklearn's `KFold(n_splits=5, shuffle=True, random_state=42)` on the alpha-
+sorted image stem list (Train images first, then Test). Each fold is the
+test set exactly once; the other four serve as train (with a small 20%
+validation carve from the train side for monitoring).
+
+  Fold | Test images (count = 9, 8, 8, 8, 8)
+  -----|---------------------------------------------------------------
+    1  | train_13, train_17, train_21, train_27, train_7, train_8,
+       | test_11, test_8, test_9
+    2  | train_15, train_18, train_20, train_23, train_24, train_25,
+       | train_9, test_14
+    3  | train_1, train_10, train_14, train_2, test_1, test_12,
+       | test_3, test_4
+    4  | train_11, train_12, train_4, train_6, test_13, test_2,
+       | test_5, test_6
+    5  | train_16, train_19, train_22, train_26, train_3, train_5,
+       | test_10, test_7
+
+(This is the same fold convention used by the AGAFNet CoNSeP replication
+training script.)
+
+------------------------------------------------------------
+3.5  Pre-processing applied in this work
+------------------------------------------------------------
+
+  - Per-image label parsing: load .mat -> inst_map (int32) + type_map
+    (remapped to 1..4 per the 7->4 remap above).
+  - Patch extraction (for AGAFNet replication training only): 256x256
+    patches tiled from each 1000x1000 image with stride 164
+    (= 6x6 = 36 patches per image; positions are sorted+deduplicated so
+    edge patches are included exactly once).
+  - Reinhard color normalization with TARGET = LAB stats of the FIRST
+    training image after the Train+Test alpha-sorted load
+    (= train_1.png). Matches AGAFNet replication training script.
+  - Augmentations (training only): random rotation, flip, crop, elastic
+    deformation, color jitter (same set as AGAFNet replication).
+
+
+================================================================================
+4. LIZARD
+================================================================================
+
+------------------------------------------------------------
+4.1  Source + citation
+------------------------------------------------------------
+
+The Lizard dataset is the largest publicly available colonic-nuclei
+instance segmentation + classification dataset. AGAFNet cites it as ref [50]:
+
+  [Graham2021]
+      S. Graham, M. Jahanifar, A. Azam, M. Nimir, Y. W. Tsang,
+      K. Dodd, E. Hero, H. Sahota, A. Tank, K. Benes, N. Wahab,
+      F. Minhas, S. E. A. Raza, H. El Daly, K. Gopalakrishnan,
+      D. Snead, and N. M. Rajpoot,
+      "Lizard: A large-scale dataset for colonic nuclear instance
+       segmentation and classification,"
+      in Proc. IEEE/CVF Int. Conf. Comput. Vis. Workshops (ICCVW),
+      Oct. 2021, pp. 684-693.
+
+Also relevant: the Lizard data was used as the basis for the CoNIC
+challenge (Conic 2022); the patch-level 256x256 version that we use in
+this work was distributed via CoNIC.
+
+------------------------------------------------------------
+4.2  Statistics
+------------------------------------------------------------
+
+  - 4,981 H&E image patches (paper-reported "nearly half a million labeled
+    nuclei"; AGAFNet Table I reports the same image count)
+  - All patches 256x256 pixels
+  - 20x objective magnification (note: different from PanNuke/CoNSeP at 40x)
+  - From colon tissue (single tissue type; no tissue-classification head
+    needed)
+  - This work: 568K AGAFNet-detected nuclei after Stage-1 segmentation
+    (matches the 77.3% match rate against ground-truth instances reported
+    in the head-to-head experiment).
+  - On-disk layout (this system):
+        /mnt/storage1/Lizard/agafnet_replication/data_prepared/fold{1..5}/
+            {images.npy, masks.npy, types.npy}
+        images.npy : (N, 256, 256, 3)
+        masks.npy  : (N, 256, 256, 7) — channels 0..5 are the 6 nuclei
+                      classes, channel 6 is background
+        types.npy  : (N,) — colon-tissue label (single class)
+
+------------------------------------------------------------
+4.3  Classes
+------------------------------------------------------------
+
+6 nuclei classes (channel index in masks.npy):
+  ch | class id | name
+  ---|----------|--------------------
+   0 |    1     | Neutrophil
+   1 |    2     | Epithelial
+   2 |    3     | Lymphocyte
+   3 |    4     | Plasma
+   4 |    5     | Eosinophil
+   5 |    6     | Connective Tissue
+   6 |   (bg)   | background
+
+------------------------------------------------------------
+4.4  Fold protocol
+------------------------------------------------------------
+
+5-fold cross-validation with each fold tested exactly once. Fold
+assignments are stored in
+  /mnt/storage1/Lizard/agafnet_replication/data_conic/metadata.npy
+under key `fold_assignments` (dict: patch_global_idx -> fold_id).
+
+(Same fold-assignment file is used by the CoNIC challenge release and by
+the existing AGAFNet replication on this system.)
+
+------------------------------------------------------------
+4.5  Pre-processing applied in this work
+------------------------------------------------------------
+
+  - Mask parsing: 7-channel mask -> single (inst_map, type_map) per patch
+    (HoVer-Net protocol; same as PanNuke / CoNSeP).
+  - Reinhard color normalization with TARGET = LAB stats of the first
+    patch of fold 1 in the patch-sorted iteration (matches the existing
+    AGAFNet Lizard replication).
+  - Augmentations (training only): same set as PanNuke / CoNSeP.
+
+
+================================================================================
+5. COMMON PRE-PROCESSING NOTES
+================================================================================
+
+------------------------------------------------------------
+5.1  Reinhard color normalization
+------------------------------------------------------------
+
+We apply Reinhard color normalization (Reinhard et al. 2001) to all three
+datasets to reduce staining variation across slides. AGAFNet cites this
+as ref [51]:
+
+  [Reinhard2001]
+      E. Reinhard, M. Adhikhmin, B. Gooch, and P. Shirley,
+      "Color transfer between images,"
+      IEEE Comput. Graph. Appl., vol. 21, no. 4, pp. 34-41, Aug. 2001.
+
+The target image (which determines TARGET_MEAN, TARGET_STD in LAB space)
+is dataset-specific and FIXED per dataset:
+  PanNuke : fold1 image index 738
+  CoNSeP  : train_1.png (first image in Train+Test alpha-sorted load)
+  Lizard  : first patch of fold 1
+
+The same TARGET is used both for Stage-1 training inputs and for the
+Stage-2 handcrafted-feature extraction step (handcrafted features are
+extracted on Reinhard-normalized images so color-derived features are
+stain-normalized). UNI feature extraction (Stage-2 tight + ctx) uses RAW
+images per the UNI protocol.
+
+------------------------------------------------------------
+5.2  Augmentation policy (training only)
+------------------------------------------------------------
+
+Stage-1 segmentation training (AGAFNet replication AND GACF-Net):
+  - Random 90-degree rotation (k in {0, 1, 2, 3})
+  - Random horizontal + vertical flip
+  - Random elastic deformation (alpha=80, sigma=10)
+  - Random crop + resize back to 256x256 (min_scale 0.7)
+  - Random color jitter (brightness/contrast +/- 25%, hue +/- 15%)
+
+Stage-2 fusion training (per-nucleus features already extracted):
+  - No image augmentation (features are already cached).
+  - Modality dropout: 15% chance to zero out one of (hand / tight / ctx)
+    per training step, forcing the model to not over-rely on any single
+    modality.
+
+------------------------------------------------------------
+5.3  Storage layout on disk
+------------------------------------------------------------
+
+  Dataset  | Raw images                                    | GT masks
+  ---------|-----------------------------------------------|------------------------------------
+  PanNuke  | /mnt/storage2/PanNuke/fold{N}/images.npy      | .../masks.npy
+  CoNSeP   | /home/sbarua/CoNSeP/{Train,Test}/Images/*.png | .../Labels/*.mat
+  Lizard   | /mnt/storage1/Lizard/.../fold{N}/images.npy   | .../masks.npy
+
+AGAFNet replication predicted masks (used for the head-to-head experiment):
+  PanNuke  : /home/sbarua/Panuke/AGAFNet_v1/fusion/features/instance_maps/fold{1..3}_inst_maps.npz
+  CoNSeP   : /home/sbarua/CoNSeP/agafnet_replication/fusion/features/instance_maps/fold{1..5}_inst_maps.npz
+  Lizard   : /home/sbarua/Lizard/agafnet_replication/fusion/features/instance_maps/fold{1..5}_inst_maps.npz
+
+
+================================================================================
+END OF DATASETS SPEC
+================================================================================
