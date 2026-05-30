@@ -9,6 +9,7 @@ its mathematical formulation, design rationale, and empirical contribution.
 CONTENTS
 --------
   0.  Overview and pipeline diagram
+        0.1  Contributions (four headline contributions)
   1.  Stage 1 — Segmentation
         1.1  UNI ViT-L encoder
         1.2  DPT decoder
@@ -30,7 +31,10 @@ CONTENTS
   5.  Training procedure (Stage 1 + Stage 2)
   6.  Inference procedure
   7.  Empirical contributions per component
-  8.  Glossary — what to call each component in prose
+  8.  AGAFNet replication (baseline for head-to-head comparison)
+        8.1  Full end-to-end AGAFNet replication
+        8.2  Controlled head-to-head: AGAFNet masks + GACF-Net Stage 2 fusion
+  9.  Glossary — what to call each component in prose
 
 
 ================================================================================
@@ -88,6 +92,73 @@ Pipeline:
 Datasets evaluated: Lizard (6 classes, 5-fold CV, 568K nuclei),
                     CoNSeP (4 classes, 5-fold CV, 24K nuclei),
                     PanNuke (5 classes, 3-fold CV, 176K nuclei).
+
+
+------------------------------------------------------------
+0.1  CONTRIBUTIONS
+------------------------------------------------------------
+
+This work makes four contributions:
+
+(C1) A two-stage pipeline for joint nuclei segmentation and classification.
+     -----------------------------------------------------------------------
+     We propose GACF-Net, a two-stage architecture that combines a frozen
+     pathology foundation-model encoder (UNI ViT-L; Chen et al., 2024) with a
+     Dense Prediction Transformer decoder (Ranftl et al., 2021) and three
+     complementary HoVer-Net-style task heads (HV / Sem3 / Boundary) for
+     instance segmentation, followed by a per-nucleus classification stage
+     that combines 71-d handcrafted morphology features with UNI tight +
+     context tokens via XGBoost. A second-phase PatchGAN regularization
+     operating on the CONTINUOUS HV+Sem3 output maps (rather than on post-
+     thresholded masks) improves sensitivity (SE) on small / low-contrast
+     nuclei across all three evaluated datasets. To our knowledge, this
+     specific assembly — frozen pathology foundation encoder + DPT decoder
+     + HoVer-Net-style triple-head outputs + PatchGAN-on-continuous-maps
+     under a two-phase training protocol — has not been reported previously
+     for nuclei segmentation.
+
+(C2) A controlled head-to-head experimental protocol that isolates the
+     classifier from the segmenter.
+     -----------------------------------------------------------------------
+     The standard comparison in the nuclei-classification literature changes
+     both segmentation and classification at once, making it impossible to
+     attribute end-to-end gains to either side. We propose a controlled
+     protocol (Section 8.2) that holds segmentation FIXED at a baseline's
+     predicted instance masks and swaps ONLY the classifier head. The
+     protocol uses Convention C (HoVer-Net global F1) with identical FN_d
+     (undetected ground-truth) for both methods, so the comparison directly
+     isolates per-nucleus classifier quality from segmentation quality.
+     We demonstrate the protocol against AGAFNet (Naing et al., IEEE TIP
+     2026) on three datasets.
+
+(C3) A foundation-model + tree-boosting handoff with a cross-term-protecting
+     XGBoost configuration.
+     -----------------------------------------------------------------------
+     We propose using the Stage 2 fusion network as a representation learner
+     and XGBoost as the final classifier, with a cross-term-protecting XGBoost
+     configuration (`colsample_bylevel=1.0, colsample_bynode=1.0`,
+     `reg_lambda=1.5`) that prevents intra-tree column subsampling from
+     severing multiplicative cross-feature pairs across sub-samples within
+     the same tree. This handoff retains the strong XGBoost-on-raw baseline
+     while adding the fusion model's specific representational contribution.
+     We also document two per-nucleus feature preprocessing choices that are
+     necessary for downstream performance and easy to miss:
+     (a) signed_log1p + per-fold StandardScaler on the 71-d handcrafted
+         morphology features (raw features span 9 orders of magnitude;
+         without this, pairwise cosine across the dataset is ~0.97);
+     (b) Raw 1024-d UNI embeddings + StandardScaler, NOT PCA-reduced
+         (PCA-64 discards directions that carry rare-class signal — drops
+         Eosinophil and Neutrophil F1 to 0% on a Lizard linear probe).
+
+(C4) A faithful AGAFNet replication on Lizard, CoNSeP, and PanNuke.
+     -----------------------------------------------------------------------
+     We re-implement AGAFNet (Naing et al., IEEE TIP 2026) on all three
+     datasets under the paper's training recipe, providing a per-dataset
+     baseline that supports both the end-to-end and controlled head-to-head
+     comparisons. The replication code, training protocol, and per-dataset
+     gaps from paper-reported numbers are documented honestly in Section 8.1.
+     The replication is released as paper-writing reference rather than as
+     an architectural improvement to AGAFNet.
 
 
 ================================================================================
@@ -835,7 +906,166 @@ adds at most 0.4 F1 and on 2 of 3 datasets slightly hurts.
 
 
 ================================================================================
-8. GLOSSARY — WHAT TO CALL EACH COMPONENT IN PROSE
+8. AGAFNET REPLICATION (BASELINE FOR HEAD-TO-HEAD COMPARISON)
+================================================================================
+
+AGAFNet (Naing et al., IEEE TIP 2026) is the principal comparison baseline. To
+disentangle "how good is our segmentation" from "how good is our classification",
+we carry out TWO related experiments built on faithful AGAFNet replication:
+
+  8.1  Full end-to-end AGAFNet replication
+       (AGAFNet segmentation + AGAFNet's own pixel-majority classification)
+  8.2  Controlled head-to-head: AGAFNet masks + GACF-Net Stage 2 fusion
+       (AGAFNet segmentation + GACF-Net Stage 2 classifier on the same masks)
+
+Together these isolate the classifier contribution under fixed segmentation,
+while still letting us report a faithful AGAFNet baseline at the segmentation
+level for the full end-to-end comparison.
+
+
+------------------------------------------------------------
+8.1  Full end-to-end AGAFNet replication
+------------------------------------------------------------
+
+What we built:
+  Paper-faithful re-implementation of AGAFNet (Naing et al., IEEE TIP 2026):
+    - EfficientNet-B0 encoder
+    - Dual decoders: type-classification (multi-class) + boundary (binary)
+    - Attention blocks: CSAIB (channel-spatial), AGCB (attention-guided
+      context), FARB (feature aggregation refinement)
+    - HV-map head (HoVer-Net-style instance separation, our addition over
+      the paper, used in post-processing)
+    - Tissue classification head (PanNuke only, 19 tissue types)
+    - Auxiliary deep supervision heads (2, paper-specific)
+    - ~24M parameters total
+
+  Trained per fold on each dataset under the AGAFNet recipe:
+    - AdamW with linear warmup + cosine annealing to 1e-6
+    - 120 epochs, early stopping at patience=30
+    - lr: 2e-4 (PanNuke), 1e-4 (CoNSeP, per paper), 1e-4 (Lizard)
+    - Batch size 4, weight_decay=1e-4, label_smoothing=0.1
+    - Reinhard color normalization (target = first training image's LAB stats)
+    - Random rotation / flip / elastic / color jitter augmentation
+    - 5-fold CV on Lizard / CoNSeP; standard 3-fold CV on PanNuke
+      (each fold tested exactly once: split1=train(1+2) test=3,
+       split2=train(1+3) test=2, split3=train(2+3) test=1)
+
+Classification at inference (AGAFNet's native protocol):
+  The per-pixel type-prediction map is argmax'd, then for each predicted
+  nucleus the per-instance class is the MAJORITY VOTE over the predicted
+  nucleus's pixels (foreground classes only). This is the classifier that
+  the head-to-head experiment in Section 8.2 swaps out.
+
+Post-processing (HoVer-Net-style watershed, same constants as the AGAFNet
+script's Cell 10/8):
+  fg_threshold=0.5, min_nucleus_size=30, max_nucleus_size=10000,
+  sobel_ksize=21, energy_threshold=0.4 — applied to (type_probs, hv_pred).
+
+What we use this for in the paper:
+  - Report AGAFNet's per-dataset segmentation metrics under our replication
+    (ACC, Dice, SE, AJI, PQ) alongside paper-reported numbers, with the
+    replication gap explicitly documented.
+  - Provide the per-instance class labels that constitute the "AGAFNet-MV"
+    baseline in Section 8.2's Convention C table.
+
+Replication results:
+  Per-dataset segmentation metrics (ACC, Dice, SE, AJI, PQ) and Convention C
+  macro F1 for AGAFNet's own classifier are reported in
+  GACF_NET_FINAL_RESULTS.txt (this file holds the architectural specification
+  only — numbers live in the results document).
+
+  The replication generally under-performs the paper on per-instance quality
+  (PQ, Dice, SE) by several points; we attribute this to undocumented training
+  details (class-balancing, augmentation specifics, post-processing thresholds).
+  The head-to-head in Section 8.2 uses OUR replication's predicted masks (not
+  paper-reported numbers), so any replication gap on the paper-reported
+  metrics does NOT affect the Section 8.2 comparison's validity — both
+  classifiers see exactly the same masks.
+
+Code locations:
+  - CoNSeP: agafnet_mask_fusion_consep/code/run_agafnet_consep_perfold.py
+            (per-fold-parallel variant of CoNSeP/fusion_final_document/scripts/
+             run_agafnet_consep.py)
+  - PanNuke: agafnet_mask_fusion_pannuke/code/run_agafnet_pannuke_persplit.py
+             (per-split-parallel variant of Panuke/fusion_final_document/scripts/
+              agafnet_replication_training.py, with FOLD_SPLITS patched to
+              standard PanNuke 3-fold CV instead of the original 2-distinct-
+              test-folds convention)
+  - Lizard: pre-existing AGAFNet predictions at
+            /home/sbarua/Lizard/agafnet_replication/fusion/features/
+            instance_maps/fold{1..5}_inst_maps.npz
+
+
+------------------------------------------------------------
+8.2  Controlled head-to-head: AGAFNet masks + GACF-Net Stage 2 fusion
+------------------------------------------------------------
+
+Question:
+  Holding segmentation FIXED at AGAFNet's predicted instance masks, does
+  GACF-Net's Stage 2 fusion classify nuclei better than AGAFNet's own pixel-
+  majority-vote classifier?
+
+Why this comparison matters:
+  The full GACF-Net pipeline differs from AGAFNet on BOTH segmentation
+  AND classification. A direct end-to-end win does not tell us which side
+  earns the gain. This controlled head-to-head isolates the CLASSIFIER by
+  feeding the SAME AGAFNet-predicted instance masks to BOTH classifiers,
+  evaluated under Convention C — which uses IDENTICAL FN_d (undetected
+  ground-truth) for both methods since the segmentation is fixed.
+
+Pipeline (per dataset):
+  Step 0  Post-process AGAFNet's saved predictions (.pkl) into per-fold
+          instance maps + type maps (.npz). Verbatim HoVer-Net post-
+          processing — same constants as Section 8.1.
+  Step 1  For each AGAFNet-predicted nucleus, match to ground-truth at
+          IoU >= 0.5; record fold_id, image_idx, centroid, bbox, area,
+          iou_with_gt, gt_class (0 if unmatched), agafnet_class
+          (pixel majority of AGAFNet's type_pred over the predicted nucleus).
+          Saves a single labels table that ALL downstream steps key off.
+  Step 2  Extract 71-d handcrafted features per nucleus from Reinhard-
+          normalized images (Section 2.1). Parallelized across CPU workers,
+          one image per task.
+  Step 3  Extract UNI tight (centroid) + ctx (bbox-mean) features per
+          nucleus (Sections 2.2, 2.3) from RAW (un-Reinhard) images.
+  Step 4  Per-fold StandardScaler fit on (fold_id != test_fold) & (gt_class>0)
+          rows ONLY (no test leakage). Output: 5 per-fold feature H5 files
+          containing all rows scaled by that fold's training stats.
+  Step 5  Train GACF-Net Stage 2 (Section 3) per fold on labeled training
+          rows; extract graph_emb (192) + cross_emb (192) for ALL rows.
+  Step 6  Train XGBoost (Section 4 HEADLINE config) per fold on labeled
+          training rows; predict on test rows. Compute Convention C per
+          class with weights (2, 2, 1, 1). Compare against AGAFNet's
+          per-nucleus class on the same matched set with the same FN_d.
+
+Ablation modes computed (same as Section 4):
+  hand / deep / raw / +graph / +cross    plus the +random null control.
+
+What "AGAFNet-MV" means in our tables:
+  AGAFNet's own per-nucleus class, computed as the pixel-majority vote of
+  AGAFNet's type_pred over the predicted nucleus's pixels. This is what
+  AGAFNet's native classification yields once you collapse its pixel map
+  to per-instance labels for evaluation under Convention C.
+
+What we report in the paper (comparison column):
+  For the head-to-head against AGAFNet-MV, we report ONLY the +graph+cross
+  (HEADLINE) F1 — i.e. the full GACF-Net Stage 2 fusion mode (Section 3 + 4
+  with `raw_graph_cross` features). The remaining ablation modes (hand /
+  deep / raw / +graph alone / +random null control) are computed and kept
+  in the working folder for reference, but the paper table shows a single
+  GACF-Net column vs the AGAFNet-MV column to keep the comparison clean.
+
+Results (per-class and macro Convention C F1 for AGAFNet-MV and our
++graph+cross, per dataset) are reported in GACF_NET_FINAL_RESULTS.txt —
+this file holds the experimental design only.
+
+Code locations:
+  - Lizard:  /home/sbarua/fanseg/agafnet_mask_fusion/{code/step0..6, preds/, reports/}
+  - CoNSeP:  /home/sbarua/fanseg/agafnet_mask_fusion_consep/{code/step0..6, preds/, reports/}
+  - PanNuke: /home/sbarua/fanseg/agafnet_mask_fusion_pannuke/{code/step0..6, preds/, reports/}
+
+
+================================================================================
+9. GLOSSARY — WHAT TO CALL EACH COMPONENT IN PROSE
 ================================================================================
 
 In a paper, use these terms consistently:
