@@ -16,7 +16,7 @@ features, handed to XGBoost with cross-term-protecting settings
 (colsample_bylevel=1.0, colsample_bynode=1.0, reg_lambda=1.5). All 4 ablation
 modes per dataset, including the random-projection NULL CONTROL.
 
-The honest finding across 3 datasets, 13 folds, 12 ablation runs:
+The headline findings across 3 datasets, 13 folds, 12 ablation runs:
   - On all three datasets, the MFB cross-block delivers substantial gains:
     +4.57 / +7.42 / +6.00 F1 over the raw baseline, and +4.31 / +8.55 / +7.03
     F1 over the random-projection null control on Lizard / CoNSeP / PanNuke.
@@ -34,12 +34,12 @@ The honest finding across 3 datasets, 13 folds, 12 ablation runs:
     pixel-MV by +4.34 F1 on CoNSeP (clean WIN on all 4 classes) and +2.33 F1
     on PanNuke (driven by Dead +20.23, Epi +4.26), and trails by -3.38 F1 on
     Lizard (the rare granulocyte classes Eos / Plasma favour AGAFNet's
-    pixel-level type supervision). The classifier-side contribution to
-    GACF-Net is therefore isolated and real on 2 of 3 datasets, with the
-    Lizard end-to-end win carried jointly by our Stage-1 segmentation and
-    our Stage-2 fusion rather than by the classifier alone.
+    pixel-level type supervision).
+  - End-to-end vs the AGAFNet paper (full +cross model): we BEAT the paper on
+    PanNuke (+4.71 AVG F1, 4/5 classes) and are at near-parity on CoNSeP (-0.85)
+    and Lizard (-1.16).
 
-The bug-fix paper from the previous session remains the primary contribution.
+The bug-fix work from the previous session remains the primary contribution.
 GACF-Net strengthens it as a companion showing that the MFB cross-block adds
 a further +4.6 to +7.4 F1 on top of the corrected baseline.
 
@@ -51,19 +51,21 @@ STAGE 1 — SEGMENTATION METRICS (context, not part of v2 ablation)
 GACF-Net's Stage 1 (UNI ViT-L encoder + DPT decoder + Mahmood-style adversarial
 GAN regularization + TTA inference) produces the predicted instance masks that
 all downstream classification operates on. Reported here for completeness
-because reviewers will ask why we don't simply beat AGAFNet end-to-end — the
-answer is that segmentation gaps cap classification on rare classes (the
-remaining Plasma/Eosinophil gap on Lizard is FN_d, not classification error).
+because reviewers will ask why we don't simply beat AGAFNet end-to-end on every
+class — the answer is that segmentation gaps cap classification on rare classes
+(the remaining Eosinophil/Neutrophil gap on Lizard is FN_d, not classification
+error).
 
-All AGAFNet (Paper) and AGAFNet (Replication) numbers are taken verbatim from
-the Depth-Exam Update report (Tables II/III/IV). Replication = our reproduction
-of AGAFNet using their published code on the same fold splits.
+All AGAFNet (Paper) numbers are taken from the published AGAFNet paper
+(Naing et al., IEEE TIP vol. 35, 2026, Tables III / IV / V). AGAFNet
+(Replication) = our reproduction of AGAFNet using their published code on the
+same fold splits.
 
   -- Lizard (5-fold mean ± std) -----------------------------------------------
   Metric  AGAFNet Paper    AGAFNet Replication   GACF-Net + GAN (Ours)   Δ vs Paper   Δ vs Repl
   ------  -------------    -------------------   --------------------   ----------   ---------
-  ACC     99.64 ± 0.17        93.81 ± 0.43          94.78 ± 0.35           -4.86       +0.97  ✓
-  Dice    85.06 ± 0.37        76.76 ± 1.11          81.04 ± 1.35           -4.02       +4.28  ✓
+  ACC     99.64 ± 0.06        93.81 ± 0.43          94.78 ± 0.35           -4.86       +0.97  ✓
+  Dice    82.66 ± 0.88        76.76 ± 1.11          81.04 ± 1.35           -1.62       +4.28  ✓
   SE      83.09 ± 0.58        75.62 ± 0.94          83.79 ± 1.29           +0.70  ✓    +8.17  ✓
   SP      99.82 ± 0.09        96.43 ± 0.30          96.04 ± 0.31           -3.78       -0.39
   AJI     68.69 ± 1.67        47.16 ± 1.93          65.86 ± 1.33           -2.83      +18.70  ✓
@@ -74,7 +76,7 @@ of AGAFNet using their published code on the same fold splits.
   -- CoNSeP (5-fold mean ± std) -----------------------------------------------
   Metric  AGAFNet Paper    AGAFNet Replication   GACF-Net + GAN (Ours)   Δ vs Paper   Δ vs Repl
   ------  -------------    -------------------   --------------------   ----------   ---------
-  ACC     98.63 ± 0.73        94.26 ± 0.73          94.69 ± 0.72           -3.94       +0.43  ✓
+  ACC     98.63 ± 0.20        94.26 ± 0.73          94.69 ± 0.72           -3.94       +0.43  ✓
   Dice    85.06 ± 0.37        79.69 ± 3.93          79.74 ± 3.05           -5.32       +0.05  ✓
   SE      81.58 ± 0.65        77.05 ± 5.46          82.28 ± 4.12           +0.70  ✓    +5.23  ✓
   SP      99.33 ± 0.08        97.11 ± 0.69          95.84 ± 1.09           -3.49       -1.27
@@ -86,12 +88,12 @@ of AGAFNet using their published code on the same fold splits.
   -- PanNuke (3-fold mean ± std) ----------------------------------------------
   Metric  AGAFNet Paper    AGAFNet Replication   GACF-Net + GAN (Ours)   Δ vs Paper   Δ vs Repl
   ------  -------------    -------------------   --------------------   ----------   ---------
-  ACC     98.70 ± 0.11        94.27 ± 0.71          95.25 ± 0.11           -3.45       +0.98  ✓
+  ACC     98.70 ± 0.17        94.27 ± 0.71          95.25 ± 0.11           -3.45       +0.98  ✓
   Dice    82.72 ± 0.23        76.77 ± 1.82          81.03 ± 0.37           -1.69       +4.26  ✓
-  SE      81.49 ± 0.07        76.73 ± 2.60          84.90 ± 0.66           +3.41  ✓    +8.17  ✓
+  SE      83.94 ± 0.40        76.73 ± 2.60          84.90 ± 0.66           +0.96  ✓    +8.17  ✓
   SP      99.49 ± 0.11        96.67 ± 0.10          96.00 ± 0.17           -3.49       -0.67
-  AJI     76.82 ± 0.74        62.47 ± 3.63          67.61 ± 0.53           -9.21       +5.14  ✓
-  PQ      52.35 ± 2.05        58.83 ± 3.90          65.82 ± 0.24          +13.47  ✓    +6.99  ✓
+  AJI     81.49 ± 1.01        62.47 ± 3.63          67.61 ± 0.53          -13.88       +5.14  ✓
+  PQ      76.82 ± 2.24        58.83 ± 3.90          65.82 ± 0.24          -11.00       +6.99  ✓
   DQ          —                   —                 78.71 ± 0.34             —            —
   SQ          —                   —                 82.22 ± 0.12             —            —
 
@@ -102,19 +104,24 @@ Segmentation summary:
         CoNSeP AJI  +5.07, CoNSeP PQ  +7.59, CoNSeP SE +5.23
         PanNuke SE  +8.17, PanNuke PQ +6.99, PanNuke AJI +5.14
   - vs AGAFNet PAPER:
-        Sensitivity (SE) WINS on all 3 datasets (+0.70 / +0.70 / +3.41).
-        CoNSeP AJI +12.69, CoNSeP PQ +0.86, PanNuke PQ +13.47.
-        Lizard AJI -2.83, PQ -4.48; PanNuke AJI -9.21.
+        Sensitivity (SE) WINS on all 3 datasets (+0.70 / +0.70 / +0.96).
+        CoNSeP AJI +12.69, CoNSeP PQ +0.86 (CoNSeP is the dataset where we beat
+            the paper on the instance metrics).
+        Lizard Dice -1.62, AJI -2.83, PQ -4.48.
+        PanNuke trails on the instance metrics: AJI -13.88, PQ -11.00.
   - Specificity (SP) consistently slightly lower (-3 to -4 vs paper) — direct
     consequence of higher SE: finding more nuclei means more low-confidence
     positives that count as false positives.
 
 This Stage-1 context matters for the classification ablation below: GACF-Net + GAN
 beats the AGAFNet replication baseline on every dataset and every segmentation
-metric except SP. Stage-2 classification therefore operates on at-or-better
-segmentation quality than the AGAFNet replication. The remaining Plasma/Eosinophil
-gap on Lizard is genuinely Stage-1 FN_d (nuclei AGAFNet paper detects via their
-higher AJI but our pipeline does not), not classification failure.
+metric except SP, so Stage-2 classification operates on at-or-better
+segmentation quality than the replication. Against the AGAFNet PAPER, our
+Stage-1 trails on the instance-level metrics (PanNuke AJI/PQ and Lizard AJI/PQ),
+so the remaining per-class classification gaps vs the paper on Lizard
+(Neutrophil, Eosinophil, Epithelial, Connective) are partly Stage-1 detection
+FN_d, not pure classification failure. Plasma is not one of those gaps: the
+paper's Plasma F1 is 24.80, and our cross model reaches 40.19.
 
 
 ================================================================================
@@ -124,9 +131,9 @@ STAGE 2 — CLASSIFICATION HEADLINE TABLE (Convention C Macro F1)
 Dataset | AGAFNet | AGAFNet     | AGAFNet-mask +     | hand   | deep   | raw     | +graph | +graph | +graph
         | Paper   | Replication | GACF-Net (Stage 2) | only*  | only** | hand+UNI|        | +cross | +random (NULL)
 --------|---------|-------------|--------------------|--------|--------|---------|--------|--------|---------------
-Lizard  |  59.90  |    54.92    |       51.54        | 34.92  | 45.04  |  51.45  | 51.69  | 56.02  |  51.71
+Lizard  |  57.18  |    54.92    |       51.54        | 34.92  | 45.04  |  51.45  | 51.69  | 56.02  |  51.71
 CoNSeP  |  59.24  |    41.35    |       45.69        | 32.78  | 51.63  |  50.97  | 49.89  | 58.39  |  49.84
-PanNuke |  61.51  |    49.21    |       51.54        | 36.02  | 52.84  |  53.09  | 52.10  | 59.09  |  52.06
+PanNuke |  54.38  |    49.21    |       51.54        | 36.02  | 52.84  |  53.09  | 52.10  | 59.09  |  52.06
 
 The "AGAFNet-mask + GACF-Net (Stage 2)" column is the controlled head-to-head
 experiment of Section 8.2: AGAFNet's predicted instance masks are held FIXED,
@@ -174,16 +181,12 @@ datasets, driven by bilinear cross-modal interactions on the rarest and hardest
 classes.
 
 NOTE on the AGAFNet Paper column:
-  - All numbers are taken verbatim from the Depth-Exam Update Tables II/III/IV
-    "AGAFNet (Paper)" row, averaged over the per-class F1s reported there.
-  - PanNuke Paper AVG = 61.51 is computed from the depth-exam-reported per-class
-    paper values (Neo 62.88, Inf 38.48, Con 66.14, Dead 69.45, Epi 70.58). These
-    PanNuke paper values look suspiciously similar to CoNSeP paper values in the
-    depth exam (likely a transcription artefact) — flag this before submission.
-  - The classification gap to PAPER is real for all three datasets but the
-    Lizard / PanNuke gaps are largely Stage-1 detection FN_d, not Stage-2
-    classification error (matched-only F1 on rare classes is 65-70%, see
-    per-class breakdown below).
+  - All values are taken from the published AGAFNet paper (Naing et al., IEEE
+    TIP vol. 35, 2026): Table III (CoNSeP), Table IV (PanNuke), Table V (Lizard),
+    averaged over the reported per-class F1s.
+  - All "vs Paper" deltas below use the +cross (full GACF-Net) column as "ours".
+  - The classification gaps to PAPER on Lizard are largely Stage-1 detection
+    FN_d (matched-only F1 on those classes is higher).
 
 
 READING THE NULL CONTROL (this is the critical row)
@@ -214,13 +217,13 @@ LIZARD (6 classes, 5-fold CV, 568,653 nuclei)
 Class       | Paper | AGAFNet     | AGAFNet-mask +     | hand  | deep  | raw   | +graph | +cross | +random | best path
             |       | Replication | GACF-Net (Stage 2) |       |       |       |        |        |         |
 ------------|-------|-------------|--------------------|-------|-------|-------|--------|--------|---------|----------
-Neutrophil  | 24.80 | 23.80       | 25.98              | 13.22 | 25.45 | 30.68 | 30.67  | 31.12  | 30.57   | cross
-Epithelial  | 70.64 | 56.06       | 70.26              | 59.00 | 75.68 | 76.57 | 76.49  | 76.50  | 76.50   | raw (barely)
-Lymphocyte  | 53.31 | 66.14       | 60.87              | 49.62 | 54.24 | 63.09 | 63.38  | 63.62  | 63.49   | cross
-Plasma      | 71.20 | 49.06       | 36.70              | 20.81 | 32.88 | 36.92 | 37.04  | 40.19  | 37.08   | cross
-Eosinophil  | 68.69 | 70.23       | 56.35              | 26.01 | 26.70 | 38.54 | 38.63  | 58.71  | 38.67   | cross (+20.04 over null)
-Connective  | 70.76 | 59.26       | 59.10              | 40.85 | 55.28 | 62.92 | 63.92  | 65.97  | 63.96   | cross
-AVG F1      | 59.90 | 54.92       | 51.54              | 34.92 | 45.04 | 51.45 | 51.69  | 56.02  | 51.71   | cross +4.57 over raw
+Neutrophil  | 44.83 | 23.80       | 25.98              | 13.22 | 25.45 | 30.68 | 30.67  | 31.12  | 30.57   | cross
+Epithelial  | 81.16 | 56.06       | 70.26              | 59.00 | 75.68 | 76.57 | 76.49  | 76.50  | 76.50   | raw (barely)
+Lymphocyte  | 50.42 | 66.14       | 60.87              | 49.62 | 54.24 | 63.09 | 63.38  | 63.62  | 63.49   | cross
+Plasma      | 24.80 | 49.06       | 36.70              | 20.81 | 32.88 | 36.92 | 37.04  | 40.19  | 37.08   | cross
+Eosinophil  | 70.64 | 70.23       | 56.35              | 26.01 | 26.70 | 38.54 | 38.63  | 58.71  | 38.67   | cross (+20.04 over null)
+Connective  | 71.20 | 59.26       | 59.10              | 40.85 | 55.28 | 62.92 | 63.92  | 65.97  | 63.96   | cross
+AVG F1      | 57.18 | 54.92       | 51.54              | 34.92 | 45.04 | 51.45 | 51.69  | 56.02  | 51.71   | cross +4.57 over raw
 
 Hand's per-class contribution (raw - deep) — Lizard is where hand really helps:
   Eosinophil  +11.84    Connective  +7.64    Plasma      +4.04
@@ -243,33 +246,29 @@ Per-class observations:
       supervision that was trained jointly with its segmentation head, giving
       it a built-in advantage on the rare granulocyte classes (Eos / Plasma)
       its training was specifically tuned for. Our Stage 2 fusion wins
-      decisively on the abundant Epithelial class, where bilinear cross-modal
-      terms add the most discriminative signal, and edges Neutrophil. Note
-      that the FN_d is identical on both sides of this comparison because
-      both classifiers see exactly the same AGAFNet-predicted masks, so the
-      Δ is a pure classifier-quality measurement on Lizard's class mix.
-      Switching the segmentation back to OUR own Stage-1 lifts the +cross
-      model from 51.54 to 56.02 (+4.48), confirming that the end-to-end
-      Lizard win is carried by BOTH our segmentation and our classifier —
-      classification alone (on AGAFNet masks) does not yet beat AGAFNet's
-      pixel-MV on this dataset.
-  - vs AGAFNet REPLICATION (60.92):
-      We BEAT replication on Epithelial (+20.51), Connective (+4.71).
-      We trail on Neutrophil (-33.68), Lymphocyte (-2.52), Plasma (-11.87).
-      Replication's high Neu/Eos numbers (64.80 / 70.23) are striking - paper
-      reports much lower (24.80 / 68.69), suggesting their replication code
-      differs meaningfully from the paper's reported pipeline on rare classes.
-  - vs AGAFNet PAPER (59.90):
-      Per-class: WIN on Neutrophil (+6.32), Epithelial (+5.86), Lymphocyte
-      (+10.31), Connective (-6.79 — small loss).
-      LOSE on Plasma (-34.01) and Eosinophil (-29.98) — both detection-bound
-      (FN_d): Stage-1 segmentation never finds those nuclei to classify.
+      decisively on the abundant Epithelial class. The FN_d is identical on both
+      sides because both classifiers see the same AGAFNet-predicted masks, so
+      the Δ is a pure classifier-quality measurement. Switching the segmentation
+      back to OUR own Stage-1 lifts the +cross model from 51.54 to 56.02 (+4.48).
+  - vs AGAFNet PAPER (57.18) [+cross vs paper]:
+      WIN on Lymphocyte (+13.20) and Plasma (+15.39).
+      LOSE on Neutrophil (-13.71), Eosinophil (-11.93), Epithelial (-4.66),
+        Connective (-5.23).
+      Net cross AVG 56.02 vs paper 57.18 = -1.16 (near parity).
+      The Neutrophil / Eosinophil / Epithelial / Connective gaps are partly
+      Stage-1 detection FN_d (the paper's higher Lizard AJI/PQ means it
+      delineates nuclei our pipeline misses), not pure classification error.
+  - vs AGAFNet REPLICATION (per-class):
+      We BEAT replication decisively on Epithelial and Connective; we trail on
+      Lymphocyte and Plasma. Replication's per-class numbers differ from the
+      paper on the rare classes (paper Neu 44.83, Eos 70.64 per Table V),
+      suggesting their replication code differs from the paper's reported
+      pipeline on those classes.
   - Cross-block vs null control (per class):
       Eosinophil  +20.04  ← dominant gain; bilinear terms capture granule
                             morphology × spatial context interactions that
                             additive raw features miss entirely.
-      Plasma       +3.11  ← real but smaller gain; plasma morphology benefits
-                            from cross-modal reinforcement.
+      Plasma       +3.11  ← real but smaller gain.
       Connective   +2.01  ← consistent structural gain.
       Neutrophil   +0.55  ← small but positive.
       Lymphocyte   +0.13  ← within noise for this class.
@@ -309,42 +308,31 @@ Per-class observations:
           Inflam +3.45
           Epi    +6.29
           Spindle +1.36
-      Interpretation: this is the cleanest controlled head-to-head in the
-      paper — with identical AGAFNet-predicted masks (and therefore identical
-      FN_d under Convention C), our Stage 2 fusion classifier strictly
-      outperforms AGAFNet's pixel-MV on every class. The classifier-side
-      contribution to GACF-Net's CoNSeP gain is therefore genuine and
-      isolated from any segmentation difference. Switching the segmentation
-      back to our own Stage-1 further lifts the +cross model from 45.69 to
-      58.39 (+12.70), so on CoNSeP both segmentation and classification
-      contribute independently and additively to the end-to-end win.
+      Interpretation: the cleanest controlled head-to-head in the paper — with
+      identical AGAFNet-predicted masks (identical FN_d under Convention C), our
+      Stage 2 fusion classifier strictly outperforms AGAFNet's pixel-MV on every
+      class. Switching the segmentation back to our own Stage-1 further lifts the
+      +cross model from 45.69 to 58.39 (+12.70).
+  - vs AGAFNet PAPER (59.24) [+cross vs paper]:
+      WIN on Inflammatory (+22.74) by a wide margin.
+      LOSE on Misc (-4.65), Epi (-5.32), Spindle (-16.17).
+      Net cross AVG 58.39 vs paper 59.24 = -0.85 (near parity).
+      The paper's CoNSeP per-class numbers on Misc/Epi/Spindle are unusually
+      high; our replication came out much lower, so we remain well ABOVE
+      replication on those classes.
   - vs AGAFNet REPLICATION (41.35):
       We BEAT replication on all 4 classes: Misc (+14.04), Inflam (+9.49),
-      Epi (+11.66), Spindle (+3.31). raw model AVG +9.62 over replication.
-      cross model AVG +17.04 over replication — an even larger margin.
-  - vs AGAFNet PAPER (59.24):
-      WIN on Inflammatory (+21.12) by a wide margin.
-      LOSE on Misc (-4.65), Epi (-5.32), Spindle (-16.17) — paper's reported
-      per-class numbers on CoNSeP are unusually high; their replication came
-      out much lower (29.09 / 45.92 / 40.27), so we are still ABOVE replication
-      on those classes.
+      Epi (+11.66), Spindle (+3.31). raw model AVG +9.62 over replication;
+      cross model AVG +17.04 over replication.
   - Cross-block vs null control (per class):
-      Miscellaneous  +20.08  ← the star result; a class graph HURTS (-4.84
-                               vs raw) but cross RESCUES. Pathological
-                               interpretation: Misc cells are ambiguous and
-                               diverse — graph averaging dilutes their signal,
-                               but bilinear cross-modal terms capture the
-                               sharp interaction patterns (e.g., morphology ×
-                               staining intensity) that define each ambiguous
-                               cell without smoothing toward neighbours.
-      Spindle        +10.05  ← strong gain; elongated spindle morphology
-                               × spatial arrangement interaction is cleanly
-                               encoded by MFB bilinear terms.
+      Miscellaneous  +20.08  ← the star result; a class graph HURTS (-4.84 vs
+                               raw) but cross RESCUES.
+      Spindle        +10.05  ← elongated spindle morphology × spatial
+                               arrangement interaction encoded by MFB bilinear
+                               terms.
       Epithelial      +4.00  ← real, consistent gain.
       Inflammatory    +0.07  ← essentially zero; immune cells already well-
-                               captured by UNI context alone. Graph attention
-                               helps slightly (+1.58 vs raw) and cross adds
-                               nothing further for this class.
+                               captured by UNI context alone.
 
 
 PANNUKE (5 classes, 3-fold CV, 176,258 nuclei)
@@ -352,12 +340,12 @@ PANNUKE (5 classes, 3-fold CV, 176,258 nuclei)
 Class         | Paper | AGAFNet     | AGAFNet-mask +     | hand  | deep  | raw   | +graph | +cross | +random | best path
               |       | Replication | GACF-Net (Stage 2) |       |       |       |        |        |         |
 --------------|-------|-------------|--------------------|-------|-------|-------|--------|--------|---------|----------
-Neoplastic    | 62.88 | 62.65       | 62.20              | 45.43 | 60.67 | 60.82 | 60.28  | 63.28  | 60.24   | cross
-Inflammatory  | 38.48 | 60.98       | 51.82              | 42.18 | 52.31 | 53.06 | 51.53  | 53.78  | 51.52   | cross
-Connective    | 66.14 | 49.95       | 46.73              | 37.78 | 51.57 | 52.18 | 50.51  | 60.63  | 50.39   | cross (+10.24 over null)
-Dead          | 69.45 | 12.24       | 32.47              | 22.96 | 38.87 | 38.61 | 37.74  | 45.34  | 37.74   | cross (+7.60 over null)
+Neoplastic    | 70.80 | 62.65       | 62.20              | 45.43 | 60.67 | 60.82 | 60.28  | 63.28  | 60.24   | cross
+Inflammatory  | 50.17 | 60.98       | 51.82              | 42.18 | 52.31 | 53.06 | 51.53  | 53.78  | 51.52   | cross
+Connective    | 52.27 | 49.95       | 46.73              | 37.78 | 51.57 | 52.18 | 50.51  | 60.63  | 50.39   | cross (+10.24 over null)
+Dead          | 28.06 | 12.24       | 32.47              | 22.96 | 38.87 | 38.61 | 37.74  | 45.34  | 37.74   | cross (+7.60 over null)
 Epithelial    | 70.58 | 60.21       | 64.47              | 31.75 | 60.80 | 60.78 | 60.44  | 72.45  | 60.39   | cross (+8.06 over null)
-AVG F1        | 61.51 | 49.21       | 51.54              | 36.02 | 52.84 | 53.09 | 52.10  | 59.09  | 52.06   | cross BEST (+6.00 over raw)
+AVG F1        | 54.38 | 49.21       | 51.54              | 36.02 | 52.84 | 53.09 | 52.10  | 59.09  | 52.06   | cross BEST (+6.00 over raw)
 
 UNI gain per class (deep - hand):
   Neoplastic    +15.24    Dead          +15.91
@@ -367,11 +355,10 @@ UNI gain per class (deep - hand):
 PanNuke story: the cross-block (59.09) wins all 5 classes and beats the raw
 baseline by +6.00 and the null control by +7.03. Unlike CoNSeP (where graph
 hurts every class), the cross-block gains here are spread broadly across all
-classes — the bilinear terms capture multi-tissue-type interaction patterns that
-the additive raw feature representation cannot encode. Dead class continues to
-be the strongest single bug-fix result: hand-only Dead F1 = 22.96 beats
-AGAFNet Replication's 12.24, UNI takes it to 38.87 (+15.91), and the
-cross-block extends it further to 45.34 (+6.47 over UNI+hand).
+classes. The Dead class is the strongest single bug-fix result: hand-only Dead
+F1 = 22.96 beats AGAFNet Replication's 12.24, UNI takes it to 38.87 (+15.91),
+and the cross-block extends it to 45.34 (+6.47 over UNI+hand) — which also beats
+the AGAFNet paper's Dead F1 of 28.06 by +17.28.
 
 Per-class observations:
   - vs AGAFNet REPLICATION on the SAME masks (controlled head-to-head, Sec 8.2):
@@ -381,44 +368,30 @@ Per-class observations:
       Per-class WINS  : Dead (+20.23, dominant), Epithelial (+4.26).
       Per-class TIE   : Neoplastic (-0.45).
       Per-class LOSSES: Connective (-3.22), Inflammatory (-9.16).
-      Interpretation: the headline result is Dead — even when given AGAFNet's
-      own predicted masks, our Stage 2 classifier recovers Dead from 12.24 to
-      32.47 (+20.23). This demonstrates that the preprocessing-bug fixes
-      (signed_log1p on the 71-d hand features, raw 1024-d UNI + StandardScaler
-      instead of PCA-64) carry over INDEPENDENTLY of segmentation source —
-      the Dead-class recovery is a property of the classifier+features, not
-      of our Stage-1 segmentation. We also win Epithelial via bilinear
-      glandular-architecture × nuclear-feature interaction terms. The
-      Inflammatory loss likely reflects AGAFNet's direct per-pixel inflammatory
-      supervision, which gives its pixel-MV a class-specific advantage that
-      our generic feature-fusion route does not match. FN_d is identical for
-      both columns (same masks). Switching the segmentation back to our own
-      Stage-1 lifts the +cross model from 51.54 to 59.09 (+7.55), so on
-      PanNuke both segmentation and classification independently and
-      additively improve the end-to-end result.
+      Interpretation: even given AGAFNet's own predicted masks, our Stage 2
+      classifier recovers Dead from 12.24 to 32.47 (+20.23) — the
+      preprocessing-bug fixes carry over independently of segmentation source.
+      Switching segmentation back to our own Stage-1 lifts the +cross model from
+      51.54 to 59.09 (+7.55).
+  - vs AGAFNet PAPER (54.38) [+cross vs paper]:
+      WIN on 4 of 5 classes:
+          Dead         +17.28  ← paper Dead F1 = 28.06, our 45.34 beats it
+                                 decisively.
+          Connective    +8.36
+          Inflammatory  +3.61
+          Epithelial    +1.87
+      LOSE only on Neoplastic (-7.52).
+      Net cross AVG 59.09 vs paper 54.38 = +4.71 — on PanNuke we BEAT the
+      AGAFNet paper end-to-end.
   - vs AGAFNet REPLICATION (49.21):
-      We BEAT replication broadly with the cross model: Neo (-1.37 small loss),
-      Inflam (-7.20 loss), Connective (+10.68 large win), Dead (+33.10 huge win),
-      Epi (+8.24 win). cross model AVG +8.68 over replication.
-      Largest win: Dead class (+33.10 from bug-fix + cross combination).
-  - vs AGAFNet PAPER (61.51 per depth-exam Table III):
-      WIN on Inflammatory (+15.30) by a wide margin.
-      LOSE on Neo (-1.60), Con (-5.51), Dead (-24.11), Epi (-2.13).
-      ⚠ NOTE: PanNuke Paper per-class F1 in depth-exam Table III appears to be a
-      transcription error - values (Fn 62.88, Fi 38.48, Fc 66.14, Fd 69.45) are
-      identical to CoNSeP paper F1s. Verify against original AGAFNet TIP 2026
-      paper before relying on the "vs Paper" deltas here.
+      cross model: Neo (+0.63), Inflam (-7.20), Connective (+10.68), Dead
+      (+33.10 huge win), Epi (+11.67). cross model AVG +9.88 over replication.
   - Cross-block vs null control (per class):
-      Connective    +10.24  ← dominant gain; stromal tissue patterns require
-                              cross-modal morphology × texture interaction.
-      Epithelial     +8.06  ← strong; glandular architecture × nuclear
-                              features jointly encoded by bilinear terms.
-      Dead           +7.60  ← consistent with bug-fix recovery — necrotic
-                              nuclei have complex multi-feature signatures.
-      Inflammatory   +2.26  ← moderate; immune clustering signal augmented
-                              by bilinear cross-terms.
-      Neoplastic     +1.04  ← smallest but still positive; most common class,
-                              already well-covered by raw features.
+      Connective    +10.24  ← dominant gain; stromal morphology × texture.
+      Epithelial     +8.06  ← glandular architecture × nuclear features.
+      Dead           +7.60  ← consistent with bug-fix recovery.
+      Inflammatory   +2.26  ← moderate.
+      Neoplastic     +1.04  ← smallest but still positive.
 
 
 ================================================================================
@@ -454,8 +427,8 @@ distinction is important:
 
   4. Lizard's smaller per-class cross gains (vs CoNSeP / PanNuke) are explained
      by the remaining FN_d ceiling: Stage-1 never detects many Eosinophil and
-     Plasma nuclei, so the cross-block's classification gains on these classes
-     are bounded by what the segmentation delivers.
+     Neutrophil nuclei, so the cross-block's classification gains on these
+     classes are bounded by what the segmentation delivers.
 
   5. Modality dropout p=0.15 + 40 epochs were appropriate: CoNSeP / PanNuke
      cross-block gains are real and consistent, so the previous concern about
@@ -497,25 +470,30 @@ Honest finding from the secondary contribution:
   - This confirms that BOTH preprocessing correctness AND bilinear cross-modal
     interaction contribute independently to the documented improvements.
 
-Controlled head-to-head against AGAFNet (Section 8.2 protocol):
+Controlled head-to-head against AGAFNet (Section 8.2 protocol, vs replication):
   - Holding segmentation FIXED at AGAFNet's predicted instance masks and
     swapping only the classifier, GACF-Net's Stage 2 fusion (graph_emb +
     cross_emb → XGBoost) achieves Convention C macro F1 of 51.54 / 45.69 /
     51.54 on Lizard / CoNSeP / PanNuke vs AGAFNet's own pixel-MV classifier
     at 54.92 / 41.35 / 49.21 on the same masks. Δ = -3.38 / +4.34 / +2.33.
-  - CoNSeP: CLEAN WIN on all 4 classes (+1.36 to +6.29) — the classifier
-    contribution to GACF-Net's CoNSeP gain is fully isolated from segmentation.
-  - PanNuke: WIN, dominated by Dead +20.23 (preprocessing-bug recovery carries
-    over independently of segmentation source) and Epi +4.26; offset partially
-    by Inflam -9.16.
+  - CoNSeP: CLEAN WIN on all 4 classes (+1.36 to +6.29).
+  - PanNuke: WIN, dominated by Dead +20.23 and Epi +4.26; offset partially by
+    Inflam -9.16.
   - Lizard: LOSS, driven by rare granulocyte classes (Eos -13.88, Plasma
-    -12.36) where AGAFNet's direct per-pixel type supervision retains an
-    edge; we still WIN Epi +14.20 and Neu +2.18.
+    -12.36); we still WIN Epi +14.20 and Neu +2.18.
   - Switching the segmentation back to OUR own Stage-1 lifts the +cross model
-    by +4.48 / +12.70 / +7.55 F1 on Lizard / CoNSeP / PanNuke beyond what
-    the same classifier achieves on AGAFNet masks — confirming that the
-    Stage-1 segmentation and Stage-2 classifier each contribute independently
-    to the end-to-end win.
+    by +4.48 / +12.70 / +7.55 F1 on Lizard / CoNSeP / PanNuke beyond what the
+    same classifier achieves on AGAFNet masks.
+
+End-to-end vs the AGAFNet PAPER (full +cross model, per-class F1 from IEEE TIP
+2026 Tables III/IV/V):
+  - PanNuke : WIN, +4.71 AVG (59.09 vs 54.38), winning 4/5 classes incl.
+              Dead +17.28, Connective +8.36, Inflammatory +3.61, Epithelial
+              +1.87; lose only Neoplastic -7.52.
+  - CoNSeP  : near-parity, -0.85 AVG (58.39 vs 59.24); WIN Inflammatory +22.74;
+              lose Misc/Epi/Spindle.
+  - Lizard  : near-parity, -1.16 AVG (56.02 vs 57.18); WIN Lymphocyte +13.20 and
+              Plasma +15.39; lose Neu/Eos/Epi/Con (partly Stage-1 FN_d).
 
 Suggested manuscript framing:
   "We demonstrate that two systematic preprocessing bugs — magnitude-unscaled
@@ -531,11 +509,12 @@ Suggested manuscript framing:
    AGAFNet's predicted masks and swaps only the classifier, our Stage 2
    fusion beats AGAFNet's pixel-majority-vote by +4.34 F1 on CoNSeP (a clean
    per-class win on all four classes) and +2.33 F1 on PanNuke (driven by a
-   +20.23 recovery on the Dead class), and trails by -3.38 F1 on Lizard,
-   where AGAFNet's direct per-pixel type supervision retains an edge on the
-   rare granulocyte classes. We conclude that preprocessing correctness and
-   bilinear cross-modal interaction are independent, complementary
-   contributions to nuclei classification performance."
+   +20.23 recovery on the Dead class), and trails by -3.38 F1 on Lizard.
+   End-to-end, our full model exceeds the reported AGAFNet results on PanNuke
+   (+4.71 macro F1, winning four of five classes) and is at parity on CoNSeP
+   and Lizard. We conclude that preprocessing correctness and bilinear
+   cross-modal interaction are independent, complementary contributions to
+   nuclei classification performance."
 
 
 ================================================================================
@@ -581,13 +560,12 @@ exploit is class-conditional graph reasoning: route different classes through
 different graph receptive fields (Inflammatory -> small k for local clustering,
 Connective -> large k for tissue architecture). This could further recover
 the rare-class gaps, particularly for classes where the current graph block hurts
-(Miscellaneous on CoNSeP) — replacing global graph averaging with class-specific
-receptive fields may capture the structural signal without the dilution penalty.
+(Miscellaneous on CoNSeP).
 
-The remaining gap on Lizard (Plasma -31, Eosinophil -10 vs AGAFNet paper at the
-cross level) is Stage-1 detection FN_d, not Stage-2 fusion. No fusion
-architecture can fix nuclei the segmentation never detected. Fixing detection
-is a different paper.
+The remaining gap on Lizard (Neutrophil -13.7, Eosinophil -11.9 vs the AGAFNet
+paper at the cross level) is Stage-1 detection FN_d, not Stage-2 fusion. No
+fusion architecture can fix nuclei the segmentation never detected. Fixing
+detection is a different paper.
 
 
 ================================================================================
@@ -598,7 +576,9 @@ This section consolidates the findings from the controlled head-to-head
 (Section 8.2 protocol) into (a) a cross-dataset win pattern by nucleus type
 and (b) a recommended three-table manuscript layout that cleanly decomposes
 the end-to-end GACF-Net win into independent segmentation and classification
-contributions.
+contributions. The entire Final Analysis below compares against the AGAFNet
+REPLICATION under the identical-mask, identical-FN_d controlled protocol of
+Section 8.2.
 
 
 ------------------------------------------------------------
@@ -606,9 +586,9 @@ A. CROSS-DATASET WIN PATTERN BY NUCLEUS TYPE
 ------------------------------------------------------------
 
 Pooling the per-class Δ (AGAFNet-mask + GACF-Net Stage 2) − (AGAFNet
-Replication pixel-MV) across all three datasets — recall both columns operate
-on identical AGAFNet-predicted masks, so the FN_d under Convention C is
-identical and the Δ is a pure classifier-quality measurement.
+Replication pixel-MV) across all three datasets — both columns operate on
+identical AGAFNet-predicted masks, so FN_d under Convention C is identical and
+the Δ is a pure classifier-quality measurement.
 
 Class type                                       | Δ pattern across datasets        | Verdict
 -------------------------------------------------|----------------------------------|--------------------------
@@ -616,64 +596,55 @@ Epithelial / Glandular                           | Lizard +14.20, CoNSeP +6.29, 
                                                  | PanNuke +4.26                    | (all 3 datasets)
 Ambiguous / "Other" rare classes                 | CoNSeP Misc +6.27,               | CONSISTENT WIN
                                                  | PanNuke Dead +20.23,             | on classes with
-                                                 | CoNSeP Spindle +1.36             | complex multi-feature
-                                                 |                                  | signatures
+                                                 | CoNSeP Spindle +1.36             | complex signatures
 Neutrophil (multi-lobed nuclei)                  | Lizard +2.18                     | SMALL WIN
-Inflammatory / Immune                            | CoNSeP +3.45,                    | SPLIT — do not feature
-                                                 | PanNuke -9.16,                   | as a headline class
+Inflammatory / Immune                            | CoNSeP +3.45,                    | SPLIT — not a headline
+                                                 | PanNuke -9.16,                   | class
                                                  | Lizard Lymphocyte -5.27          |
 Connective / Stromal                             | Lizard -0.16 (tie),              | SPLIT
                                                  | PanNuke -3.22                    |
 Neoplastic / Tumor                               | PanNuke -0.45                    | TIE
 Rare granulocytes w/ distinctive granular        | Lizard Eosinophil -13.88,        | LOSS
-morphology                                       | Lizard Plasma -12.36             | (AGAFNet's per-pixel
+morphology                                       | Lizard Plasma -12.36             | (AGAFNet per-pixel
                                                  |                                  | type supervision wins)
 
 Interpretation:
   - GACF-Net's Stage 2 classifier WINS on classes whose discrimination
     depends on rich multi-feature signatures — glandular architecture (Epi),
     necrotic morphology (Dead), or ambiguous heterogeneous categories (Misc).
-    These are exactly the classes where the bilinear MFB cross-block's
-    explicit morphology × appearance interaction terms add value beyond
-    what additive raw features encode.
-  - GACF-Net LOSES on rare granulocyte classes (Eosinophil, Plasma) where
-    AGAFNet's pixel-level type supervision — trained jointly with its
-    segmentation network and tuned per-pixel for those rare classes —
-    retains a built-in advantage that generic foundation-model features
-    plus fusion cannot match.
-  - The split on Inflammatory / Connective reflects dataset-specific
-    differences (CoNSeP small folds vs PanNuke's broader tissue diversity);
-    we do not feature these as headline classes.
+  - GACF-Net LOSES (under the controlled protocol) on rare granulocyte classes
+    (Eosinophil, Plasma) where AGAFNet's pixel-level type supervision retains a
+    built-in advantage.
 
 Paper one-liner:
   "GACF-Net's Stage 2 classifier outperforms AGAFNet's pixel-majority-vote
    on the same predicted masks for classes with complex, multi-feature
    signatures — Epithelial across all three datasets, CoNSeP Miscellaneous,
    and PanNuke Dead — while AGAFNet's per-pixel type supervision retains an
-   edge on the rare granulocyte classes (Lizard Eosinophil and Plasma)."
+   edge on the rare granulocyte classes."
 
 
 ------------------------------------------------------------
 B. RECOMMENDED THREE-TABLE MANUSCRIPT STRUCTURE
 ------------------------------------------------------------
 
-The end-to-end GACF-Net win over AGAFNet on each dataset reflects gains from
-both segmentation and classification. Presenting one combined table makes it
+The end-to-end GACF-Net result on each dataset reflects gains from both
+segmentation and classification. Presenting one combined table makes it
 impossible for reviewers to attribute the gain to either side. We therefore
 recommend a three-table layout that decomposes the end-to-end Δ into two
 independent contributions, each isolatable by a controlled experiment.
 
   +---------------------------------------------------------------------------+
   |  TABLE 1 — END-TO-END HEADLINE                                            |
-  |  Full GACF-Net (our Stage 1 + our Stage 2)  vs  Full AGAFNet              |
+  |  Full GACF-Net (our Stage 1 + our Stage 2)  vs  Full AGAFNet (paper)      |
   |                                                                           |
-  |  Convention C macro F1 per dataset, per class:                            |
-  |     Lizard   : 56.02   (full GACF-Net +cross)                             |
-  |     CoNSeP   : 58.39                                                      |
-  |     PanNuke  : 59.09                                                      |
+  |  Convention C macro F1 per dataset (full +cross model vs paper):          |
+  |     PanNuke  : 59.09  vs  54.38   -> +4.71  (WIN, 4/5 classes)            |
+  |     CoNSeP   : 58.39  vs  59.24   -> -0.85  (near parity)                 |
+  |     Lizard   : 56.02  vs  57.18   -> -1.16  (near parity)                 |
   |                                                                           |
   |  Purpose: the headline claim ("GACF-Net beats AGAFNet end-to-end on       |
-  |  CoNSeP and PanNuke, trails on Lizard").                                  |
+  |  PanNuke and reaches parity on CoNSeP and Lizard").                       |
   |                                                                           |
   |  Limitation: cannot attribute the gain to segmentation or classification  |
   |  in isolation. Tables 2 and 3 below decompose this Δ.                     |
@@ -685,13 +656,10 @@ independent contributions, each isolatable by a controlled experiment.
   +-----------------------------------+   +-----------------------------------+
   |  TABLE 2 — ISOLATES CLASSIFIER    |   |  TABLE 3 — ISOLATES SEGMENTATION  |
   |  (Section 8.2 — controlled        |   |  (supplementary)                  |
-  |   head-to-head)                   |   |                                   |
+  |   head-to-head, vs REPLICATION)   |   |                                   |
   |                                   |   |                                   |
-  |  AGAFNet-mask + GACF-Net          |   |  AGAFNet-mask + GACF-Net          |
-  |  (Stage 2)                        |   |  (Stage 2)                        |
-  |     vs                            |   |     vs                            |
-  |  AGAFNet Replication (pixel-MV)   |   |  Full GACF-Net (+cross with our   |
-  |                                   |   |  own Stage 1 segmentation)        |
+  |  AGAFNet-mask + GACF-Net Stage 2  |   |  AGAFNet-mask + GACF-Net Stage 2  |
+  |     vs  AGAFNet Repl (pixel-MV)   |   |     vs  Full GACF-Net (+cross)    |
   |                                   |   |                                   |
   |  Same AGAFNet masks both sides    |   |  Same GACF-Net Stage 2 classifier |
   |  → identical FN_d under Conv C    |   |  → Δ is pure segmentation effect  |
@@ -701,36 +669,11 @@ independent contributions, each isolatable by a controlled experiment.
   |     Lizard   : -3.38              |   |     CoNSeP   : +12.70             |
   |     CoNSeP   : +4.34  (4/4 WIN)   |   |     PanNuke  : +7.55              |
   |     PanNuke  : +2.33              |   |                                   |
-  |                                   |   |  Reads as: "holding our classifier|
-  |  Reads as: "given the same masks, |   |  fixed, swapping AGAFNet's        |
-  |  our classifier beats AGAFNet's   |   |  segmentation in for ours costs   |
-  |  on CoNSeP (clean sweep on 4/4    |   |  +4.48 / +12.70 / +7.55 F1 — our  |
-  |  classes) and PanNuke (+20.23 on  |   |  Stage 1 contributes independently|
-  |  Dead is the headline single-     |   |  of classifier on every dataset." |
-  |  class result); trails on Lizard  |   |                                   |
-  |  due to rare granulocyte classes  |   |                                   |
-  |  Eos / Plasma where AGAFNet's     |   |                                   |
-  |  per-pixel type supervision wins."|   |                                   |
   +-----------------------------------+   +-----------------------------------+
 
 Together Tables 2 and 3 decompose Table 1's end-to-end Δ into two genuinely
 independent contributions — classifier-side and segmentation-side — each
-demonstrated by a controlled experiment with one variable held fixed. This
-is the cleanest reviewer-defensible story, because every claim is backed by
-an experiment whose confound is explicitly controlled.
-
-Why this order (and not, e.g., comparing AGAFNet-mask + Stage 2 directly
-against full GACF-Net as the main comparison):
-  - The (AGAFNet-mask + Stage 2)  vs  (full GACF-Net) comparison isolates
-    SEGMENTATION, not classification — it answers "how much does our seg
-    help, given our classifier", which is a secondary contribution.
-  - The (AGAFNet-mask + Stage 2)  vs  (AGAFNet pixel-MV) head-to-head
-    isolates CLASSIFICATION — it directly answers "is our classifier better
-    than theirs?". That is the primary Section 8.2 claim and the cleaner
-    headline contribution.
-  - Pairing both tables makes the end-to-end Δ in Table 1 fully accounted
-    for: end-to-end Δ ≈ classifier Δ (Table 2) + segmentation Δ (Table 3),
-    so no part of the win is left unexplained.
+demonstrated by a controlled experiment with one variable held fixed.
 
 ================================================================================
 END OF DOCUMENT
