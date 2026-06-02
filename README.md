@@ -50,9 +50,9 @@ This is the methodological contribution, not a metric discrepancy.
 
 | Dataset | Δ vs Raw Baseline | Δ vs Null Control | Δ vs AGAFNet Repl. | Δ vs AGAFNet Paper |
 |---------|-------------------|-------------------|--------------------|--------------------|
-| Lizard  | +4.57 F1          | +4.31 F1          | -4.90              | -1.16              |
+| Lizard  | +4.57 F1          | +4.31 F1          | +1.10              | -1.16              |
 | CoNSeP  | +7.42 F1          | +8.55 F1          | **+17.04**         | -0.85              |
-| PanNuke | +4.81 F1          | +5.84 F1          | **+8.68**          | **+3.47 ✓**        |
+| PanNuke | +6.00 F1          | +7.03 F1          | **+9.88**          | **+4.71 ✓**        |
 
 Key highlights from the per-class breakdown:
 
@@ -80,8 +80,8 @@ Paper values from Tables III–V of Naing et al. (IEEE TIP 2026). ✓ = GACF-Net
 
 | Metric | AGAFNet (Paper) | AGAFNet (Repl.) | GACF-Net + GAN | Δ vs Paper  | Δ vs Repl.   |
 |--------|-----------------|-----------------|----------------|-------------|--------------|
-| ACC    | 99.64 ± 0.17    | 93.81 ± 0.43    | 94.78 ± 0.35   | -4.86       | **+0.97 ✓**  |
-| Dice   | 85.06 ± 0.37    | 76.76 ± 1.11    | 81.04 ± 1.35   | -4.02       | **+4.28 ✓**  |
+| ACC    | 99.64 ± 0.06    | 93.81 ± 0.43    | 94.78 ± 0.35   | -4.86       | **+0.97 ✓**  |
+| Dice   | 82.66 ± 0.88    | 76.76 ± 1.11    | 81.04 ± 1.35   | -1.62       | **+4.28 ✓**  |
 | SE     | 83.09 ± 0.58    | 75.62 ± 0.94    | 83.79 ± 1.29   | **+0.70 ✓** | **+8.17 ✓**  |
 | SP     | 99.82 ± 0.09    | 96.43 ± 0.30    | 96.04 ± 0.31   | -3.78       | -0.39        |
 | AJI    | 68.69 ± 1.67    | 47.16 ± 1.93    | 65.86 ± 1.33   | -2.83       | **+18.70 ✓** |
@@ -93,7 +93,7 @@ Paper values from Tables III–V of Naing et al. (IEEE TIP 2026). ✓ = GACF-Net
 
 | Metric | AGAFNet (Paper) | AGAFNet (Repl.) | GACF-Net + GAN | Δ vs Paper   | Δ vs Repl.  |
 |--------|-----------------|-----------------|----------------|--------------|-------------|
-| ACC    | 98.63 ± 0.73    | 94.26 ± 0.73    | 94.69 ± 0.72   | -3.94        | **+0.43 ✓** |
+| ACC    | 98.63 ± 0.20    | 94.26 ± 0.73    | 94.69 ± 0.72   | -3.94        | **+0.43 ✓** |
 | Dice   | 85.06 ± 0.37    | 79.69 ± 3.93    | 79.74 ± 3.05   | -5.32        | **+0.05 ✓** |
 | SE     | 81.58 ± 0.65    | 77.05 ± 5.46    | 82.28 ± 4.12   | **+0.70 ✓**  | **+5.23 ✓** |
 | SP     | 99.33 ± 0.08    | 97.11 ± 0.69    | 95.84 ± 1.09   | -3.49        | -1.27       |
@@ -106,7 +106,7 @@ Paper values from Tables III–V of Naing et al. (IEEE TIP 2026). ✓ = GACF-Net
 
 | Metric | AGAFNet (Paper) | AGAFNet (Repl.) | GACF-Net + GAN | Δ vs Paper  | Δ vs Repl.  |
 |--------|-----------------|-----------------|----------------|-------------|-------------|
-| ACC    | 98.70 ± 0.11    | 94.27 ± 0.71    | 95.25 ± 0.11   | -3.45       | **+0.98 ✓** |
+| ACC    | 98.70 ± 0.17    | 94.27 ± 0.71    | 95.25 ± 0.11   | -3.45       | **+0.98 ✓** |
 | Dice   | 82.72 ± 0.23    | 76.77 ± 1.82    | 81.03 ± 0.37   | -1.69       | **+4.26 ✓** |
 | SE     | 83.94 ± 0.40    | 76.73 ± 2.60    | 84.90 ± 0.66   | **+0.96 ✓** | **+8.17 ✓** |
 | SP     | 99.49 ± 0.11    | 96.67 ± 0.10    | 96.00 ± 0.17   | -3.49       | -0.67       |
@@ -132,7 +132,7 @@ GACF-Net wins on all 3 datasets across nearly every metric.
 - SP consistently slightly lower — expected from higher SE: more detections → more FP.
 
 > Stage-2 classification operates on at-or-better segmentation quality than the AGAFNet
-> replication. Remaining Plasma/Eosinophil gaps on Lizard are Stage-1 FN_d (missed
+> replication. Remaining Neutrophil/Eosinophil gaps on Lizard are Stage-1 FN_d (missed
 > detections), not classification failure.
 
 ---
@@ -148,16 +148,14 @@ Stage 2 fusion + XGBoost — see "Controlled Head-to-Head" section below.*
 |---------|---------------|---------------|------------------------------------|------------|------------|----------------|--------|--------------|----------------------|
 | Lizard  | 57.18         | 54.92         | 51.54                              | 34.92      | 45.04      | 51.45          | 51.69  | **56.02**    | 51.71                |
 | CoNSeP  | 59.24         | 41.35         | **45.69**                          | 32.78      | 51.63      | 50.97          | 49.89  | **58.39**    | 49.84                |
-| PanNuke | 54.42         | 49.21         | **51.54**                          | 36.02      | 52.84      | 53.09          | 52.10  | **59.09**    | 52.06                |
+| PanNuke | 54.38         | 49.21         | **51.54**                          | 36.02      | 52.84      | 53.09          | 52.10  | **59.09**    | 52.06                |
 
 ¹ *Section 8.2 controlled head-to-head: AGAFNet's predicted masks held FIXED, only the classifier swapped to GACF-Net Stage 2 (graph_emb + cross_emb → XGBoost).*
 ² *Hand only = XGBoost on 71-d handcrafted morphology features alone.*
 ³ *Deep only = XGBoost on 2048-d UNI features (tight 1024 + ctx 1024) alone.*
 
-> Note on AGAFNet Paper AVG values: Lizard=57.18 and PanNuke=54.42 are corrected from the
-> original depth-exam Table III (which had Lizard=59.90 and PanNuke=61.51 due to column
-> misreads). CoNSeP=59.24 was already correct. All three verified against Tables III–V of
-> Naing et al. (IEEE TIP 2026).
+> AGAFNet Paper AVG values (Lizard 57.18, CoNSeP 59.24, PanNuke 54.38) are averaged over the
+> per-class F1s reported in Tables III–V of Naing et al. (IEEE TIP 2026).
 
 ### Key Finding — Hand Features Are Dataset-Dependent
 
@@ -250,12 +248,12 @@ a **+4.48 / +12.70 / +7.55** F1 gain that is the pure segmentation-side contribu
 
 ## Per-Class Breakdown
 
-*All F1 scores are Convention C w=(2,2,1,1). Paper values corrected from Tables III–V of
+*All F1 scores are Convention C w=(2,2,1,1). Paper values from Tables III–V of
 Naing et al. (IEEE TIP 2026). Δ vs Paper and Δ vs Repl. both shown.*
 
 ### Lizard (6 classes, 5-fold CV, 568,653 nuclei)
 
-| Class      | Paper†    | Repl.     | AGAFNet-mask + Stage 2 | Hand      | Deep      | Raw       | +Graph    | +Cross    | +Random   | Δ Cross vs Paper | Δ Cross vs Null |
+| Class      | Paper     | Repl.     | AGAFNet-mask + Stage 2 | Hand      | Deep      | Raw       | +Graph    | +Cross    | +Random   | Δ Cross vs Paper | Δ Cross vs Null |
 |------------|-----------|-----------|------------------------|-----------|-----------|-----------|-----------|-----------|-----------|------------------|-----------------|
 | Neutrophil | 44.83     | 23.80     | 25.98                  | 13.22     | 25.45     | 30.68     | 30.67     | **31.12** | 30.57     | -13.71           | +0.55           |
 | Epithelial | 81.16     | 56.06     | **70.26**              | 59.00     | 75.68     | **76.57** | 76.49     | 76.50     | 76.50     | -4.66            | +0.00           |
@@ -265,7 +263,7 @@ Naing et al. (IEEE TIP 2026). Δ vs Paper and Δ vs Repl. both shown.*
 | Connective | 71.20     | 59.26     | 59.10                  | 40.85     | 55.28     | 62.92     | 63.92     | **65.97** | 63.96     | -5.23            | +2.01           |
 | **AVG F1** | **57.18** | **54.92** | **51.54**              | **34.92** | **45.04** | **51.45** | **51.69** | **56.02** | **51.71** | **-1.16**        | **+4.31**       |
 
-† *Corrected from depth-exam Table III. Root cause: columns misread across Table V — Plasma value used as Neutrophil, AJI metric used as Eosinophil F1, PQ metric used as Connective F1. All corrected against Naing et al. Table V.*
+*Paper values from Naing et al., IEEE TIP 2026, Table V.*
 
 **Why Neutrophil and Eosinophil trail paper:**
 Both are FN_d-bound — Stage-1 misses these rare nuclei more often than AGAFNet's
@@ -307,23 +305,23 @@ captures morphological signatures better than pixel majority voting for these cl
 
 ### PanNuke (5 classes, 3-fold CV, 176,258 nuclei)
 
-| Class        | Paper†    | Repl.     | AGAFNet-mask + Stage 2 | Hand      | Deep      | Raw       | +Graph    | +Cross    | +Random   | Δ Cross vs Paper | Δ Cross vs Null |
+| Class        | Paper     | Repl.     | AGAFNet-mask + Stage 2 | Hand      | Deep      | Raw       | +Graph    | +Cross    | +Random   | Δ Cross vs Paper | Δ Cross vs Null |
 |--------------|-----------|-----------|------------------------|-----------|-----------|-----------|-----------|-----------|-----------|------------------|-----------------|
-| Neoplastic   | 71.04     | 62.65     | 62.20                  | 45.43     | 60.67     | 60.82     | 60.28     | **63.28** | 60.24     | -7.76            | +3.04           |
+| Neoplastic   | 70.80     | 62.65     | 62.20                  | 45.43     | 60.67     | 60.82     | 60.28     | **63.28** | 60.24     | -7.52            | +3.04           |
 | Inflammatory | 50.17     | 60.98     | 51.82                  | 42.18     | 52.31     | 53.06     | 51.53     | **53.78** | 51.52     | **+3.61 ✓**      | +2.26           |
 | Connective   | 52.27     | 49.95     | 46.73                  | 37.78     | 51.57     | 52.18     | 50.51     | **60.63** | 50.39     | **+8.36 ✓**      | **+10.24**      |
 | Dead         | 28.06     | 12.24     | **32.47**              | 22.96     | 38.87     | 38.61     | 37.74     | **45.34** | 37.74     | **+17.28 ✓**     | **+7.60**       |
 | Epithelial   | 70.58     | 60.21     | **64.47**              | 31.75     | 60.80     | 60.78     | 60.44     | **72.45** | 60.39     | **+1.87 ✓**      | **+12.06**      |
-| **AVG F1**   | **54.42** | **49.21** | **51.54**              | **36.02** | **52.84** | **53.09** | **52.10** | **59.09** | **52.06** | **+4.67 ✓**      | **+7.03**       |
+| **AVG F1**   | **54.38** | **49.21** | **51.54**              | **36.02** | **52.84** | **53.09** | **52.10** | **59.09** | **52.06** | **+4.71 ✓**      | **+7.03**       |
 
-† *Corrected from depth-exam Table III. Root cause: CoNSeP Table III per-class values were copy-pasted into the PanNuke column in error. Corrected against Naing et al. Table IV.*
+*Paper values from Naing et al., IEEE TIP 2026, Table IV.*
 
 **Key observations:**
 - **Controlled head-to-head (Section 8.2):** AGAFNet-mask + Stage 2 = **51.54** beats AGAFNet
   Replication's pixel-MV (49.21) by **+2.33**. The headline single-class result is **Dead +20.23**
   (Stage 2 recovers Dead from 12.24 → 32.47 on identical masks — a property of the classifier+features,
   not of our segmentation).
-- GACF-Net full pipeline **beats paper AVG by +4.67** — the strongest dataset story.
+- GACF-Net full pipeline **beats paper AVG by +4.71** — the strongest dataset story.
 - Dead class: +17.28 over paper. Necrotic nuclei have complex multi-feature signatures
   that bilinear cross-modal terms capture far better than pixel majority voting.
 - Connective +8.36 over paper: stromal tissue morphology × texture interaction.
@@ -350,7 +348,7 @@ captures morphological signatures better than pixel majority voting for these cl
    bilinear interaction terms provide genuinely new discriminative directions.
 
 4. **Detection ceiling on Lizard:** Stage-1 segmentation never detects many Eosinophil and
-   Plasma nuclei (FN_d). Classification gains on those classes are bounded by detection quality,
+   Neutrophil nuclei (FN_d). Classification gains on those classes are bounded by detection quality,
    not fusion quality. No fusion architecture can classify nuclei the segmentation never detected.
 
 ---
@@ -462,7 +460,7 @@ classifier-side contribution is therefore isolated and real on 2 of 3 datasets.
 > Stage 2 fusion beats AGAFNet's pixel-majority-vote by +4.34 F1 on CoNSeP (clean per-class
 > win on all four classes) and +2.33 F1 on PanNuke (driven by +20.23 recovery on the Dead
 > class). GACF-Net achieves parity with AGAFNet on Lizard and CoNSeP and surpasses it on
-> PanNuke (+4.67 F1) using a strictly instance-level classification pipeline."*
+> PanNuke (+4.71 F1) using a strictly instance-level classification pipeline."*
 
 ### Comparison Statement (for Methods section)
 
@@ -485,7 +483,7 @@ This could recover rare-class gaps, particularly for Miscellaneous on CoNSeP (wh
 current k=64 global graph hurts), by replacing neighbourhood averaging with class-specific
 receptive fields that capture structural signal without the dilution penalty.
 
-> **Note:** Remaining Eosinophil and Plasma gaps on Lizard are partly Stage-1 FN_d.
+> **Note:** Remaining Eosinophil and Neutrophil gaps on Lizard are partly Stage-1 FN_d.
 > No fusion architecture can classify nuclei the segmentation never detected.
 
 ---
